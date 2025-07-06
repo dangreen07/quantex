@@ -1,0 +1,24 @@
+[project]
+name = "quantex"
+version = "0.1.0"
+description = "A simple quant strategy creation and backtesting package."
+authors = [
+    {name = "Daniel Green",email = "dangreen07@outlook.com"}
+]
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "pandas (>=2.3.0,<3.0.0)",
+    "fastparquet (>=2024.11.0,<2025.0.0)",
+]
+
+[tool.poetry]
+packages = [{include = "quantex", from = "src"}]
+
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.4.1"
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
