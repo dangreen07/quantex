@@ -290,6 +290,24 @@ class Portfolio:
             nav += unrealized + pos.average_price * pos.position
         return nav
 
+    def net_asset_value_array(self, price_array, symbol_idx: Dict[str, int]) -> float:
+        """Fast NAV calculation using a NumPy price row and symbol→index mapping.
+
+        Args:
+            price_array: 1-D array of prices aligned with a shared symbol order.
+            symbol_idx: Mapping of symbol to its column index in the array.
+
+        Returns:
+            The Net Asset Value of the portfolio for the given price snapshot.
+        """
+        nav = self.cash
+        for sym, pos in self.positions.items():
+            idx = symbol_idx[sym]
+            current_price = float(price_array[idx])
+            unrealized = (current_price - pos.average_price) * pos.position
+            nav += unrealized + pos.average_price * pos.position
+        return nav
+
     def unrealized_pnl(self, price_dict: Dict[str, float]) -> float:
         """Calculates the unrealized P&L of the portfolio.
 

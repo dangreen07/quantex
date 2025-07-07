@@ -26,6 +26,7 @@ mkdocs = "^1.6.1"
 mkdocs-material = "^9.6.15"
 mkdocstrings = "^0.29.1"
 mkdocstrings-python = "^1.8.0"
+pytest-benchmark = "^4.0.0"
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]

@@ -24,7 +24,7 @@ class Strategy(ABC):
 
     def __init__(
         self,
-        data_sources: Mapping[str, DataSource],
+        data_sources: Mapping[str, DataSource] | None = None,
         symbols: list[str] | None = None,
         *,
         initial_cash: float = 0.0,
@@ -39,8 +39,8 @@ class Strategy(ABC):
             initial_cash: Starting cash for the internal `Portfolio`.
         """
 
-        # Store references to market data sources
-        self.data_sources = data_sources
+        # Store references to market data sources (may be empty – engine injects)
+        self.data_sources = data_sources or {}
         self.timestamp = None
 
         # Maintain a portfolio to aggregate cash & PnL
@@ -60,6 +60,11 @@ class Strategy(ABC):
         # Queue of orders submitted during the current bar – cleared each step
         self._pending_orders: list[Order] = []
         self.signals = pd.DataFrame()
+
+        # --- Internals set by the engine each bar ---
+        self._price_row: list[float] | None = None
+        self._symbols: list[str] | None = None
+        self._symbol_idx: dict[str, int] | None = None
 
     def _increment_index(self) -> None:
         """Advances the internal bar pointer by one.
@@ -189,3 +194,38 @@ class Strategy(ABC):
         """Returns and clears the list of queued orders. For internal use."""
         orders, self._pending_orders = self._pending_orders, []
         return orders
+
+    # ------------------------------------------------------------------
+    # Convenience helpers for strategy authors
+    # ------------------------------------------------------------------
+
+    def get_price(self, symbol: str) -> float:
+        """Returns the latest price for *symbol*.
+
+        This accesses the numpy price row injected by the engine and is
+        therefore O(1) without any pandas overhead. Raises ``KeyError`` if the
+        symbol is not part of the backtest universe.
+        """
+
+        if self._price_row is None or self._symbol_idx is None:
+            raise RuntimeError("Market data not yet initialised for this bar.")
+        idx = self._symbol_idx.get(symbol)
+        if idx is None:
+            raise KeyError(symbol)
+        return float(self._price_row[idx])
+
+    @property
+    def prices(self) -> dict[str, float]:
+        """Lazy dict of symbol→price for the current bar (lightweight)."""
+
+        if self._price_row is None or self._symbols is None:
+            raise RuntimeError("Market data not yet initialised for this bar.")
+        return {sym: float(price) for sym, price in zip(self._symbols, self._price_row)}
+
+    # Called by EventBus – should be considered *private*
+    def _update_market_data(
+        self, price_row, symbols, symbol_idx
+    ):  # noqa: D401 – internal
+        self._price_row = price_row
+        self._symbols = symbols
+        self._symbol_idx = symbol_idx

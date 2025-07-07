@@ -5,7 +5,11 @@ theme:
 nav:
   - Home: index.md
   - Quick-Start: quickstart.md
-  - Key Concepts: concepts.md
+  - Guides:
+      - Strategies: usage/strategy.md
+      - Data Sources: usage/data-sources.md
+      - Backtesting Engine: usage/backtesting.md
+      - Execution Simulator: usage/execution.md
   - Roadmap: roadmap.md
   - API Reference:
       - Models: reference/quantex.models.md

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Mapping, cast
+from typing import Mapping
 import pandas as pd
 
 from quantex.execution import ImmediateFillSimulator
@@ -44,12 +44,21 @@ class EventBus:
         self._price_df: pd.DataFrame | None = None
 
     def _precompute_timeline(self) -> None:
-        """Gathers all timestamps from all sources and creates a unified timeline."""
-        all_timestamps = []
-        for ds in self.data_sources.values():
-            all_timestamps.extend(ds.get_raw_data().index)
+        """Creates a strictly increasing, duplicate-free timeline from sources.
 
-        self._timeline = sorted(list(set(all_timestamps)))
+        Using ``Index.union`` maintains order guarantees and avoids the cost of
+        constructing large Python ``set`` objects for millions of timestamps.
+        This also fixes a bug where duplicate timestamps across sources could
+        inflate the timeline length and dramatically slow the backtest.
+        """
+
+        timeline: pd.Index = pd.Index([])  # start empty
+        for ds in self.data_sources.values():
+            timeline = timeline.union(ds.get_raw_data().index)
+
+        # ``union`` returns a sorted, unique index by default – store as list of
+        # python ``Timestamp`` objects for fast attribute access inside the loop.
+        self._timeline = timeline.to_list()
 
     def _precompute_price_data(self) -> None:
         """Creates a unified dataframe of close prices for all symbols."""
@@ -60,6 +69,10 @@ class EventBus:
                 price_dfs[ds.symbol] = raw_data["close"]
 
         self._price_df = pd.DataFrame(price_dfs).ffill()
+        if not self._price_df.empty:
+            self._price_array = self._price_df.to_numpy(dtype=float)
+            self._symbols = list(self._price_df.columns)
+            self._symbol_idx = {sym: i for i, sym in enumerate(self._symbols)}
 
     def run(self) -> None:
         """Runs the simulation until all data is exhausted.
@@ -78,22 +91,20 @@ class EventBus:
 
         self.strategy.precompute_signals(self._price_df)
 
-        for ts in self._timeline:
+        for row_idx, ts in enumerate(self._timeline):
             self.strategy.timestamp = ts
 
-            # Get the current prices for all symbols at this timestamp
-            current_prices = self._price_df.loc[ts].to_dict()
+            price_row = self._price_array[row_idx]
 
-            # The strategy now needs to be adapted to not rely on get_current_bar
-            # This is a major change, for now we will stub the data access
-            # so the engine can run.
-            # In a real scenario, the Strategy class would be refactored to
-            # accept the current price data directly.
+            # Inject current market snapshot into strategy (very low overhead)
+            self.strategy._update_market_data(
+                price_row, self._symbols, self._symbol_idx
+            )
+
+            # Align each data source to the global timeline & advance pointer
             for ds in self.data_sources.values():
-                # We need to manually update the index of each data source
-                # to keep it in sync with the main timeline.
-                if ts in ds.get_raw_data().index:
-                    ds.index = cast(int, ds.get_raw_data().index.get_loc(ts))
+                if ds.peek_timestamp() == ts:
+                    ds._increment_index()
 
             # Run strategy logic
             self.strategy.run()
@@ -102,18 +113,20 @@ class EventBus:
             new_orders = self.strategy._pop_pending_orders()
             self.orders.extend(new_orders)
             for order in new_orders:
-                execution_price = current_prices.get(order.symbol)
-                if execution_price is None:
+                # Guard: if symbol not in price mapping, skip execution
+                idx = self._symbol_idx.get(order.symbol)
+                if idx is None:
                     continue
+                execution_price = float(price_row[idx])
                 fill = self.simulator.execute(order, execution_price, ts)
                 self.fills.append(fill)
 
-            # Record NAV
-            nav = self.strategy.portfolio.net_asset_value(
-                {str(k): float(v) for k, v in current_prices.items()}
+            # Record NAV (vectorised prices dict → float conversion once)
+            nav = self.strategy.portfolio.net_asset_value_array(
+                price_row, self._symbol_idx
             )
             self.nav.append(nav)
             self.timestamps.append(ts)
 
-            # The index of the strategy is now the main loop's concern
+            # Advance strategy book-keeping pointer
             self.strategy._increment_index()

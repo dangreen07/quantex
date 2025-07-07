@@ -154,3 +154,75 @@ class CSVDataSource(BacktestingDataSource):
         """
         start = max(0, self.index - lookback_period + 1)
         return self._df.iloc[start : self.index + 1].copy()
+
+
+# New DataSource for Parquet files
+class ParquetDataSource(BacktestingDataSource):
+    """Backtesting data source backed by a local OHLCV Parquet file.
+
+    The Parquet file must contain either an index of timestamps or a column
+    named 'timestamp', as well as the standard OHLCV columns. If a
+    'timestamp' column exists, it will be parsed and set as the index.
+    """
+
+    def __init__(self, path: str | Path, symbol: Optional[str] = None):
+        """Initializes the ParquetDataSource.
+
+        Args:
+            path: Path to the Parquet file on disk.
+            symbol: Optional symbol name. If omitted, the stem of the path is
+                used instead.
+        """
+        self.path = Path(path)
+        if not self.path.exists():
+            raise FileNotFoundError(self.path)
+
+        # Load data – let pandas/FastParquet handle decompression & column types
+        df = pd.read_parquet(self.path)
+
+        # If timestamp is a regular column, make it the index
+        if "timestamp" in df.columns:
+            df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+            df = df.set_index("timestamp")
+
+        # Ensure chronological order
+        df = df.sort_index()
+
+        required_cols = {"open", "high", "low", "close", "volume"}
+        if not required_cols.issubset(df.columns):
+            missing = required_cols.difference(df.columns)
+            raise ValueError(f"Parquet missing required columns: {missing}")
+
+        # Immutable reference to underlying data
+        self._df = df
+        self.symbol = symbol or self.path.stem
+        self.index = 0
+
+    # --- BacktestingDataSource API -----------------------------------------
+    def get_raw_data(self) -> pd.DataFrame:  # type: ignore[override]
+        return self._df
+
+    def __len__(self) -> int:  # type: ignore[override]
+        return len(self._df)
+
+    def peek_timestamp(self) -> datetime | None:  # type: ignore[override]
+        if self.index < len(self):
+            return self._df.index[self.index]
+        return None
+
+    def get_current_bar(self) -> Bar:  # type: ignore[override]
+        row = self._df.iloc[self.index]
+        ts = self._df.index[self.index]
+        return Bar(
+            timestamp=ts,
+            open=row["open"],
+            high=row["high"],
+            low=row["low"],
+            close=row["close"],
+            volume=row["volume"],
+            symbol=self.symbol,
+        )
+
+    def get_lookback_data(self, lookback_period: int) -> pd.DataFrame:  # type: ignore[override]
+        start = max(0, self.index - lookback_period + 1)
+        return self._df.iloc[start : self.index + 1].copy()

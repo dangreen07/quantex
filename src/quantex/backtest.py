@@ -58,7 +58,7 @@ class BacktestRunner:
         )
 
         metrics: dict = {}
-        if not nav_series.empty:
+        if not nav_series.empty and nav_series.iloc[0] != 0:
             metrics["total_return"] = nav_series.iloc[-1] / nav_series.iloc[0] - 1
 
         return BacktestResult(
