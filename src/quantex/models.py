@@ -1,16 +1,14 @@
-from __future__ import annotations
-
-from dataclasses import dataclass, field
-from datetime import datetime
-from typing import Dict
-
 """Core data models for QuantEx.
 
 This module defines immutable market-data records (`Bar`, `Tick`), trading
 objects (`Order`, `Fill`), and stateful position-keeping helpers
 (`Position`, `Portfolio`)."""
 
-"""Market Data Models"""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Dict
 
 
 @dataclass(frozen=True)
@@ -291,14 +289,16 @@ class Portfolio:
         return nav
 
     def net_asset_value_array(self, price_array, symbol_idx: Dict[str, int]) -> float:
-        """Fast NAV calculation using a NumPy price row and symbol→index mapping.
+        """Compute NAV using a NumPy row for maximum performance.
 
         Args:
-            price_array: 1-D array of prices aligned with a shared symbol order.
-            symbol_idx: Mapping of symbol to its column index in the array.
+            price_array (numpy.ndarray): 1-D array *aligned with* ``symbol_idx``
+                representing the latest prices for the entire universe.
+            symbol_idx (dict[str, int]): Mapping from symbol to its position in
+                ``price_array``.
 
         Returns:
-            The Net Asset Value of the portfolio for the given price snapshot.
+            float: Total net-asset-value (cash + market value of positions).
         """
         nav = self.cash
         for sym, pos in self.positions.items():
