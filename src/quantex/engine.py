@@ -98,8 +98,6 @@ class EventBus:
         if self._price_df is None:
             return  # No data to process
 
-        self.strategy.precompute_signals(self._price_df)
-
         for row_idx, ts in enumerate(self._timeline):
             self.strategy.timestamp = ts
 

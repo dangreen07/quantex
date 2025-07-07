@@ -6,20 +6,23 @@ QuantEx strategies inherit from `quantex.strategy.Strategy`.
 from quantex.strategy import Strategy
 
 class SMACross(Strategy):
-    def precompute_signals(self, prices):
-        # vectorised indicator calculation – runs **once**
-        self.signals = prices.rolling(10).mean() > prices.rolling(20).mean()
-
     def run(self):
-        # use helpers injected by the engine
+        # Access last price fast
         price = self.get_price("BTC-USD")
 
-        # custom logic – here a simple SMAs condition
-        if self.signals.loc[self.timestamp, "BTC-USD"]:
-            if self.positions["BTC-USD"].is_closed:
+        # Example: very naive SMA crossover using last N cached values you
+        # maintain yourself (live-safe – no full-history look-ahead).
+        if not hasattr(self, "_prices"):
+            self._prices = []
+        self._prices.append(price)
+        window_fast, window_slow = 10, 20
+        if len(self._prices) >= window_slow:
+            sma_fast = sum(self._prices[-window_fast:]) / window_fast
+            sma_slow = sum(self._prices[-window_slow:]) / window_slow
+            if sma_fast > sma_slow and self.positions["BTC-USD"].is_closed:
                 self.buy("BTC-USD", 1)
-        else:
-            self.close_position("BTC-USD")
+            elif sma_fast < sma_slow:
+                self.close_position("BTC-USD")
 ```
 
 ## Helper Methods
@@ -34,11 +37,10 @@ class SMACross(Strategy):
 
 ## Lifecycle
 
-1. `precompute_signals(prices_df)` – optional, called once before the event loop.
-2. Each bar:
-   a. Engine injects timestamp & prices.
-   b. `run()` executes.
-   c. Orders are routed/filled.
+Each bar the engine:
+1. Injects timestamp & prices.
+2. Calls `run()`.
+3. Executes queued orders and advances the strategy index.
 
 ## Minimal Template
 

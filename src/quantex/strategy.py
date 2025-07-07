@@ -74,19 +74,6 @@ class Strategy(ABC):
         """
         self.index += 1
 
-    def precompute_signals(self, prices: pd.DataFrame) -> None:
-        """
-        Allows a strategy to pre-compute signals or indicators in a vectorized
-        fashion before the main event loop. This is far more efficient for
-        backtesting than computing values on each bar.
-
-        Args:
-            prices: A DataFrame with timestamps as the index and symbols as
-                columns, containing the forward-filled prices for all symbols
-                in the backtest.
-        """
-        pass  # Default implementation does nothing
-
     @abstractmethod
     def run(self):
         """Executes the strategy logic for the current bar.
