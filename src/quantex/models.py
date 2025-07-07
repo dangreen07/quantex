@@ -15,7 +15,17 @@ objects (`Order`, `Fill`), and stateful position-keeping helpers
 
 @dataclass(frozen=True)
 class Bar:
-    """OHLCV bar for a single symbol and timestamp (usually end-of-period)."""
+    """OHLCV bar for a single symbol and timestamp.
+
+    Attributes:
+        timestamp: The timestamp of the bar (usually end-of-period).
+        open: The opening price.
+        high: The highest price.
+        low: The lowest price.
+        close: The closing price.
+        volume: The trading volume.
+        symbol: The symbol of the instrument.
+    """
 
     timestamp: datetime
     open: float
@@ -28,7 +38,14 @@ class Bar:
 
 @dataclass(frozen=True)
 class Tick:
-    """Single tick (trade) quote."""
+    """Single tick (trade) quote.
+
+    Attributes:
+        timestamp: The timestamp of the tick.
+        price: The price of the tick.
+        volume: The volume of the tick.
+        symbol: The symbol of the instrument.
+    """
 
     timestamp: datetime
     price: float
@@ -41,7 +58,17 @@ class Tick:
 
 @dataclass
 class Order:
-    """Represents an order submitted by a strategy."""
+    """Represents an order submitted by a strategy.
+
+    Attributes:
+        id: The unique identifier for the order.
+        symbol: The symbol of the instrument to trade.
+        side: The side of the order, either 'buy' or 'sell'.
+        quantity: The quantity of the instrument to trade.
+        order_type: The type of order, e.g., 'market' or 'limit'.
+        limit_price: The limit price for a limit order.
+        timestamp: The time the order was created.
+    """
 
     id: str
     symbol: str
@@ -62,7 +89,17 @@ class Order:
 
 @dataclass
 class Fill:
-    """Execution of (part of) an Order."""
+    """Represents the execution of (part of) an Order.
+
+    Attributes:
+        order_id: The ID of the order that was filled.
+        symbol: The symbol of the instrument that was traded.
+        quantity: The quantity of the instrument that was traded. Positive
+            for a buy, negative for a sell.
+        price: The price at which the trade was executed.
+        timestamp: The time of the execution.
+        commission: The commission paid for the trade.
+    """
 
     order_id: str
     symbol: str
@@ -72,12 +109,26 @@ class Fill:
     commission: float = 0.0
 
     def value(self) -> float:
-        """Cash impact of the fill (signed)."""
+        """Calculates the cash impact of the fill.
+
+        Returns:
+            The signed cash impact of the fill. A buy decreases cash, while a
+            sell increases it.
+        """
         return -self.quantity * self.price  # buy decreases cash, sell increases
 
 
 @dataclass
 class Trade:
+    """Represents a single trade.
+
+    Attributes:
+        symbol: The symbol of the instrument traded.
+        price: The price of the trade.
+        quantity: The quantity of the trade (signed).
+        timestamp: The timestamp of the trade.
+    """
+
     symbol: str
     price: float
     quantity: float  # signed (+ buy, - sell)
@@ -97,6 +148,11 @@ class Position:
     """Tracks position and P&L for a single symbol."""
 
     def __init__(self, symbol: str):
+        """Initializes a new Position.
+
+        Args:
+            symbol: The symbol for this position.
+        """
         self.symbol = symbol
         self.position: float = 0.0  # signed quantity
         self.trades: list["Trade"] = []
@@ -105,17 +161,19 @@ class Position:
 
     @property
     def is_long(self) -> bool:
+        """Returns True if the position is long."""
         return self.position > 0
 
     @property
     def is_short(self) -> bool:
+        """Returns True if the position is short."""
         return self.position < 0
 
     @property
     def is_closed(self) -> bool:
+        """Returns True if the position is closed."""
         return (self.position - 0) < 1e-8  ## Account for floating point errors
 
-    # Re-use calculation logic from previous Positions implementation
     def _apply_trade(self, quantity: float, price: float, timestamp: datetime):
         prev_pos = self.position
         new_pos = prev_pos + quantity
@@ -144,18 +202,41 @@ class Position:
         self.position = new_pos
         self.trades.append(Trade(self.symbol, price, quantity, timestamp))
 
-    # Public helpers
-    def buy(self, price: float, timestamp: datetime, quantity: float = 1):
+    def buy(self, quantity: float, price: float, timestamp: datetime):
+        """Increases long exposure.
+
+        Args:
+            quantity: The amount to buy. Must be positive.
+            price: The price of the purchase.
+            timestamp: The time of the purchase.
+        """
+
         if quantity <= 0:
             raise ValueError("quantity must be positive for buy")
         self._apply_trade(quantity, price, timestamp)
 
-    def sell(self, price: float, timestamp: datetime, quantity: float = 1):
+    def sell(self, quantity: float, price: float, timestamp: datetime):
+        """Decreases or flips exposure by selling.
+
+        Args:
+            quantity: The amount to sell. Must be positive.
+            price: The price of the sale.
+            timestamp: The time of the sale.
+        """
+
         if quantity <= 0:
             raise ValueError("quantity must be positive for sell")
         self._apply_trade(-quantity, price, timestamp)
 
     def calculate_total_pnl(self, current_price: float) -> float:
+        """Calculates the total P&L for this position.
+
+        Args:
+            current_price: The current market price of the symbol.
+
+        Returns:
+            The total P&L (realized + unrealized).
+        """
         unrealized = (current_price - self.average_price) * self.position
         return self.realized_pnl + unrealized
 
@@ -164,13 +245,24 @@ class Portfolio:
     """Aggregates cash and multiple Position objects."""
 
     def __init__(self, cash: float = 0.0):
+        """Initializes the Portfolio.
+
+        Args:
+            cash: The starting cash balance.
+        """
         self.starting_cash = cash
         self.cash = cash
         self.positions: Dict[str, Position] = {}
         self.realized_pnl = 0.0
 
     def process_fill(self, fill: Fill):
-        """Update cash first (commission reduces cash)."""
+        """Updates the portfolio based on a fill.
+
+        This method updates cash and the relevant position.
+
+        Args:
+            fill: The Fill object to process.
+        """
         self.cash -= fill.quantity * fill.price + fill.commission
 
         pos = self.positions.get(fill.symbol)
@@ -182,7 +274,15 @@ class Portfolio:
         pos._apply_trade(fill.quantity, fill.price, fill.timestamp)
         self.realized_pnl += pos.realized_pnl - prev_realized
 
-    def net_asset_value(self, price_dict: Dict[str, float]):
+    def net_asset_value(self, price_dict: Dict[str, float]) -> float:
+        """Calculates the total value of the portfolio.
+
+        Args:
+            price_dict: A dictionary mapping symbols to their current prices.
+
+        Returns:
+            The Net Asset Value (NAV) of the portfolio.
+        """
         nav = self.cash
         for sym, pos in self.positions.items():
             current_price = price_dict[sym]
@@ -190,7 +290,15 @@ class Portfolio:
             nav += unrealized + pos.average_price * pos.position
         return nav
 
-    def unrealized_pnl(self, price_dict: Dict[str, float]):
+    def unrealized_pnl(self, price_dict: Dict[str, float]) -> float:
+        """Calculates the unrealized P&L of the portfolio.
+
+        Args:
+            price_dict: A dictionary mapping symbols to their current prices.
+
+        Returns:
+            The total unrealized P&L across all positions.
+        """
         total = 0.0
         for sym, pos in self.positions.items():
             total += (price_dict[sym] - pos.average_price) * pos.position

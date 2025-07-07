@@ -12,3 +12,6 @@ from .models import (
     Portfolio as Portfolio,
     Trade as Trade,
 )
+from .engine import EventBus as EventBus
+from .execution import ImmediateFillSimulator as ImmediateFillSimulator
+from .backtest import BacktestRunner as BacktestRunner, BacktestResult as BacktestResult

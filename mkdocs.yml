@@ -4,10 +4,16 @@ theme:
   name: material
 nav:
   - Home: index.md
+  - Quick-Start: quickstart.md
+  - Key Concepts: concepts.md
+  - Roadmap: roadmap.md
   - API Reference:
       - Models: reference/quantex.models.md
       - Sources: reference/quantex.sources.md
       - Strategy: reference/quantex.strategy.md
+      - Engine: reference/quantex.engine.md
+      - Execution: reference/quantex.execution.md
+      - Backtest: reference/quantex.backtest.md
 plugins:
   - search
   - mkdocstrings:
@@ -16,3 +22,5 @@ plugins:
           paths:
             - .
             - ./src
+          options:
+            docstring_style: google

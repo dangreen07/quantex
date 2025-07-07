@@ -1,15 +1,16 @@
 from quantex import DataSource
-from quantex.models import Position, Portfolio
+from quantex.models import Position, Portfolio, Order
+from abc import ABC, abstractmethod
 
 
-class Strategy:
+class Strategy(ABC):
     """Base class for all trading strategies.
 
-    The class now owns a :class:`quantex.models.Portfolio` instance which keeps
-    track of cash and *Position* objects.  For convenience and backward
-    compatibility, the underlying ``positions`` mapping is exposed directly so
+    This class owns a `quantex.models.Portfolio` instance which keeps
+    track of cash and `Position` objects. For convenience and backward
+    compatibility, the underlying `positions` mapping is exposed directly so
     that existing strategy implementations that reference
-    ``self.positions[<symbol>]`` continue to work unchanged.
+    `self.positions[<symbol>]` continue to work unchanged.
     """
 
     # The engine (or outer loop) advances *all* data sources by calling
@@ -24,21 +25,14 @@ class Strategy:
         *,
         initial_cash: float = 0.0,
     ) -> None:
-        """Create a new strategy instance.
+        """Initializes a new strategy instance.
 
-        Parameters
-        ----------
-        data_sources
-            Mapping from a *source name* to a concrete
-            :class:`quantex.sources.DataSource` implementation.
-        symbols
-            List of tradable symbols the strategy should initialise
-            :class:`quantex.models.Position` objects for.  If *None*, no
-            positions are pre-populated; they will be created lazily when the
-            first trade occurs.
-        initial_cash
-            Starting cash that will be assigned to the internal
-            :class:`quantex.models.Portfolio`.
+        Args:
+            data_sources: Mapping from a source name to a concrete
+                `quantex.sources.DataSource` implementation.
+            symbols: List of tradable symbols to initialize `Position` objects
+                for. If None, positions are created lazily.
+            initial_cash: Starting cash for the internal `Portfolio`.
         """
 
         # Store references to market data sources
@@ -58,20 +52,38 @@ class Strategy:
             if sym not in self.positions:
                 self.positions[sym] = Position(sym)
 
-    def _increment_index(self) -> None:
-        """Advance the internal bar pointer by **one**.
+        # Queue of orders submitted during the current bar – cleared each step
+        self._pending_orders: list[Order] = []
 
-        This should be called by the back-testing engine **after** all logic
-        tied to the current bar has executed.
+    def _increment_index(self) -> None:
+        """Advances the internal bar pointer by one.
+
+        This should be called by the backtesting engine after all logic
+        for the current bar has executed.
         """
         self.index += 1
 
+    @abstractmethod
     def run(self):  # pragma: no cover
-        """Execute the strategy logic for the current bar.
+        """Executes the strategy logic for the current bar.
 
-        Concrete strategies **must** override this method.  It should inspect
-        the available data sources, make trading decisions, and update the
-        portfolio (typically via the exposed :pycode{self.positions}) before
-        the engine advances to the next bar.
+        Concrete strategies must override this method. It should inspect
+        the available data sources and make trading decisions.
         """
         raise NotImplementedError("Subclasses must implement this method.")
+
+    def submit_order(self, order: Order) -> None:
+        """Queues an order to be executed by the engine.
+
+        Strategies should call this method to simulate realistic order routing.
+
+        Args:
+            order: The `Order` to be submitted.
+        """
+
+        self._pending_orders.append(order)
+
+    def _pop_pending_orders(self) -> list[Order]:
+        """Returns and clears the list of queued orders. For internal use."""
+        orders, self._pending_orders = self._pending_orders, []
+        return orders
