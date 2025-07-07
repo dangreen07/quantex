@@ -22,11 +22,15 @@ all without the heavy overhead of larger, more opinionated quant libraries.
   subclass to plug in CSVs, Parquet files, live feeds, databases, etc.
 * **Back-testing Support** – A `BacktestingDataSource` base class to drive
   offline simulations.
-* **Strategy Skeleton** – A minimal `Strategy` class that you can extend
-  to implement trading logic and track `Trade` / `Positions` objects.
-* **Python 3.13+** – Takes advantage of the latest language features.
-* **Poetry-managed** – Modern dependency management, packaging, and
-  virtual-environment handling.
+* **Strategy Skeleton** – Extendable `Strategy` base class for plug-and-play
+  trading logic.
+* **Core Data Models** – Immutable `Bar`, `Tick`, `Order`, `Fill`, plus
+  stateful `Position` / `Portfolio` helpers for P&L accounting.
+* **Black + Ruff Pre-commit** – `black` auto-formats and `ruff` lints every
+  commit via *pre-commit* hooks, keeping the codebase consistent.
+* **Python 3.13+** – Embraces the latest language features.
+* **Poetry-managed** – Modern dependency management, packaging, and virtual
+  environment handling.
 
 > **Note:** The public API is still under heavy development and may change
 > until v1.0. Feedback is welcome!
@@ -43,8 +47,9 @@ Quant-Trading/
     │   └── strategy.py # Strategy abstractions
     ├── tests/          # Pytest test-suite
         ├── __init__.py
-        ├── test_sources. # Tests for sources.py
-        ├── test_strategy.py # Tests for strategy.py
+        ├── test_sources.py   # DataSource behaviours
+        ├── test_models.py    # Core data-model & PnL maths
+        └── test_strategy.py  # Strategy base-class contract
     ├── poetry.lock     # Locked dependency versions
     ├── pyproject.toml  # Poetry & build metadata
     └── README.md       # ← you are here
@@ -90,9 +95,9 @@ Poetry virtual-env so import paths resolve correctly.
 ## Development
 1. Create a new branch: `git checkout -b feature/<name>`
 2. Write your code & tests.
-3. Ensure `poetry run pytest` passes and `ruff` / `mypy` (coming soon) are
-   clean.
-4. Open a pull request describing the change.
+3. Install the git hooks once per clone: `poetry run pre-commit install`.
+   Hooks will run `black --check` and `ruff` automatically on every commit.
+4. Ensure `poetry run pytest` passes and the pre-commit hooks are clean.
 
 ---
 

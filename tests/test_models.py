@@ -1,6 +1,5 @@
 from datetime import datetime
 import pytest
-
 from quantex.models import Bar, Tick, Order, Fill, Position, Portfolio, Trade
 
 
@@ -73,9 +72,6 @@ def test_portfolio_cash_and_nav():
 
     assert portfolio.cash == pytest.approx(10000 + 500)  # starting cash + realized PnL
     assert portfolio.realized_pnl == pytest.approx(500)
-
-
-# --- Additional Position & Trade behaviour tests migrated from test_strategy.py ---
 
 
 def test_trade_str_representation():

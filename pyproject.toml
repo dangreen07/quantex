@@ -20,6 +20,7 @@ packages = [{include = "quantex", from = "src"}]
 pytest = "^8.4.1"
 black = "^25.1.0"
 pre-commit = "^4.2.0"
+ruff = "^0.12.2"
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
