@@ -36,10 +36,10 @@ jobs:
 
       # Upload the generated site as an artifact for the deploy-pages action
       - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v2
+        uses: actions/upload-pages-artifact@v3
         with:
           path: site
 
       # Deploy to GitHub Pages
       - name: Deploy to GitHub Pages
-        uses: actions/deploy-pages@v2 
+        uses: actions/deploy-pages@v3 
