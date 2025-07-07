@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Optional
+from datetime import datetime
 
 import pandas as pd
 
@@ -21,6 +22,7 @@ class DataSource(ABC):  # pylint: disable=too-few-public-methods
     """
 
     index: int = 0
+    symbol: str | None = None
 
     @abstractmethod
     def get_current_bar(self) -> Bar:
@@ -40,6 +42,19 @@ class DataSource(ABC):  # pylint: disable=too-few-public-methods
         """
         raise NotImplementedError
 
+    @abstractmethod
+    def peek_timestamp(self) -> datetime | None:
+        """Peeks at the timestamp of the next available bar.
+
+        This method should return the timestamp of the bar at the current
+        `index` without advancing the index. If the source is exhausted,
+        it should return `None`.
+
+        Returns:
+            The next timestamp, or None if the source is exhausted.
+        """
+        raise NotImplementedError
+
     def _increment_index(self) -> None:
         """Advances the internal pointer to the next bar."""
         self.index += 1
@@ -50,6 +65,15 @@ class BacktestingDataSource(DataSource):
 
     @abstractmethod
     def __len__(self) -> int:  # pragma: no cover – abstract contract
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_raw_data(self) -> pd.DataFrame:
+        """Returns the entire underlying data as a DataFrame.
+
+        This method is intended for use by the backtesting engine for
+        pre-computation and should not be used in strategy logic.
+        """
         raise NotImplementedError
 
 
@@ -88,9 +112,22 @@ class CSVDataSource(BacktestingDataSource):
         self.symbol = symbol or self.path.stem
         self.index = 0
 
+    def get_raw_data(self) -> pd.DataFrame:
+        return self._df
+
     def __len__(self) -> int:
         """Returns the number of bars in the data source."""
         return len(self._df)
+
+    def peek_timestamp(self) -> datetime | None:
+        """Peeks at the timestamp of the next available bar from the CSV.
+
+        Returns:
+            The next timestamp, or None if the source is exhausted.
+        """
+        if self.index < len(self):
+            return self._df.index[self.index]
+        return None
 
     def get_current_bar(self) -> Bar:
         """Returns the current bar from the CSV data."""

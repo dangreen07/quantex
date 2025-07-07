@@ -2,28 +2,56 @@ import pytest
 import pandas as pd
 from io import StringIO
 from pathlib import Path
+from datetime import datetime
 
 from quantex.sources import DataSource, BacktestingDataSource, CSVDataSource
 from quantex.models import Bar
 
 
-def test_datasource_methods_raise_notimplemented():
-    """Abstract DataSource should raise for unimplemented API."""
-    ds = DataSource()
+def test_datasource_abstract_methods():
+    """Test that calling abstract methods on a minimal implementation raises."""
+
+    class MinimalDataSource(DataSource):
+        def get_current_bar(self) -> Bar:
+            raise NotImplementedError
+
+        def get_lookback_data(self, lookback_period: int) -> pd.DataFrame:
+            raise NotImplementedError
+
+        def peek_timestamp(self) -> datetime | None:
+            raise NotImplementedError
+
+    ds = MinimalDataSource()
     with pytest.raises(NotImplementedError):
         ds.get_current_bar()
     with pytest.raises(NotImplementedError):
         ds.get_lookback_data(1)
+    with pytest.raises(NotImplementedError):
+        ds.peek_timestamp()
 
 
-def test_backtesting_datasource_methods_raise_notimplemented():
-    bds = BacktestingDataSource()
+def test_backtesting_datasource_abstract_methods():
+    """Test that __len__ is abstract in BacktestingDataSource."""
+
+    class MinimalBacktestingDataSource(BacktestingDataSource):
+        def get_current_bar(self) -> Bar:
+            raise NotImplementedError
+
+        def get_lookback_data(self, lookback_period: int) -> pd.DataFrame:
+            raise NotImplementedError
+
+        def peek_timestamp(self) -> datetime | None:
+            raise NotImplementedError
+
+        def __len__(self) -> int:
+            raise NotImplementedError
+
+        def get_raw_data(self) -> pd.DataFrame:
+            raise NotImplementedError
+
+    bds = MinimalBacktestingDataSource()
     with pytest.raises(NotImplementedError):
         len(bds)
-    with pytest.raises(NotImplementedError):
-        bds.get_current_bar()
-    with pytest.raises(NotImplementedError):
-        bds.get_lookback_data(1)
 
 
 class DummyDataSource(DataSource):
@@ -43,6 +71,11 @@ class DummyDataSource(DataSource):
     def get_lookback_data(self, lookback_period):
         start = max(0, self.index - lookback_period + 1)
         return self._df.iloc[start : self.index + 1].copy()
+
+    def peek_timestamp(self) -> datetime | None:
+        if self.index < len(self._df):
+            return pd.Timestamp(self.index, unit="s")
+        return None
 
 
 class DummyBacktestingDataSource(BacktestingDataSource):
@@ -68,6 +101,14 @@ class DummyBacktestingDataSource(BacktestingDataSource):
         start = max(0, self.index - lookback_period + 1)
         return self._df.iloc[start : self.index + 1].copy()
 
+    def peek_timestamp(self) -> datetime | None:
+        if self.index < len(self):
+            return pd.Timestamp(self.index, unit="s")
+        return None
+
+    def get_raw_data(self) -> pd.DataFrame:
+        return self._df
+
 
 def test_dummy_datasource_behaviour():
     prices = [10, 20, 30, 40, 50]
@@ -92,6 +133,39 @@ def test_dummy_backtesting_datasource_behaviour():
     bds._increment_index()
     window = bds.get_lookback_data(2)
     assert list(window["price"]) == [102, 103]
+
+
+def test_csv_datasource_peek_timestamp(tmp_path: Path):
+    """Tests that peek_timestamp returns the next timestamp without advancing."""
+    csv_content = StringIO(
+        """timestamp,open,high,low,close,volume
+2024-01-01 00:00:00,1,1,1,1,1
+2024-01-01 00:01:00,2,2,2,2,2
+"""
+    )
+    csv_path = tmp_path / "prices.csv"
+    csv_path.write_text(csv_content.getvalue())
+
+    ds = CSVDataSource(csv_path)
+    ts1 = pd.to_datetime("2024-01-01 00:00:00")
+    ts2 = pd.to_datetime("2024-01-01 00:01:00")
+
+    # Peek should return the first timestamp
+    assert ds.peek_timestamp() == ts1
+    # Calling it again should not change the result
+    assert ds.peek_timestamp() == ts1
+
+    # Advance the index
+    ds._increment_index()
+
+    # Peek should now return the second timestamp
+    assert ds.peek_timestamp() == ts2
+
+    # Advance again
+    ds._increment_index()
+
+    # At the end of the data, peek should return None
+    assert ds.peek_timestamp() is None
 
 
 def test_csv_datasource(tmp_path: Path):

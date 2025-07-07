@@ -7,7 +7,7 @@ import pandas as pd
 
 from quantex.engine import EventBus
 from quantex.execution import ImmediateFillSimulator
-from quantex.sources import DataSource
+from quantex.sources import BacktestingDataSource
 from quantex.strategy import Strategy
 from quantex.models import Order, Fill
 
@@ -32,7 +32,9 @@ class BacktestResult:
 class BacktestRunner:
     """User-facing helper that wires Strategy, EventBus, and Simulator."""
 
-    def __init__(self, strategy: Strategy, data_sources: Dict[str, DataSource]):
+    def __init__(
+        self, strategy: Strategy, data_sources: Dict[str, BacktestingDataSource]
+    ):
         """Initializes the BacktestRunner.
 
         Args:

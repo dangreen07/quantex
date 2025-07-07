@@ -16,84 +16,90 @@ poetry install
 
 ## 2. Prepare Some Data
 
-QuantEx does **not** bundle market data. For this tutorial we'll create a tiny CSV with two columns:
+QuantEx does **not** bundle market data. For this tutorial, create a simple CSV file named `prices.csv`.
 
 ```csv
 # prices.csv
 timestamp,open,high,low,close,volume
 2024-01-01 09:30:00,100,101,99,100.5,1000
 2024-01-01 09:31:00,100.5,101,100,100.7,500
-...
+2024-01-01 09:32:00,100.7,100.8,100.2,100.3,750
+2024-01-01 09:33:00,100.3,100.5,99.8,99.9,1200
+2024-01-01 09:34:00,99.9,100.2,99.7,100.1,900
 ```
 
-> Any OHLCV CSV (with the header above) works – longer datasets make the back-test more interesting.
+> Any OHLCV CSV with the required headers works.
 
-## 3. Build a Data Source
+## 3. Create a Strategy
 
-```python
-import pandas as pd
-from quantex.sources import BacktestingDataSource
-from quantex.models import Bar
-
-class CSVSource(BacktestingDataSource):
-    def __init__(self, path: str, symbol="TEST"):
-        self._df = pd.read_csv(path, parse_dates=["timestamp"]).set_index("timestamp")
-        self.index = 0
-        self.symbol = symbol
-
-    def __len__(self):
-        return len(self._df)
-
-    def get_current_bar(self):
-        row = self._df.iloc[self.index]
-        ts = self._df.index[self.index]
-        return Bar(ts, row.open, row.high, row.low, row.close, row.volume, self.symbol)
-
-    def get_lookback_data(self, lookback):
-        start = max(0, self.index - lookback + 1)
-        return self._df.iloc[start : self.index + 1]
-```
-
-## 4. Create a Strategy
+Create a file named `my_strategy.py`.
 
 ```python
 from quantex.strategy import Strategy
-from quantex.models import Order
-
-class BuyDip(Strategy):
-    """Buy when price falls below 10-period moving average."""
-
-    def run(self):
-        if self.index < 10:
-            return  # need history
-        window = self.data_sources["csv"].get_lookback_data(10)
-        ma10 = window.close.mean()
-        bar = self.data_sources["csv"].get_current_bar()
-        if bar.close < ma10 and self.positions["TEST"].is_closed:
-            self.submit_order(Order("buy-1", "TEST", "buy", 100))
-        elif bar.close > ma10 and self.positions["TEST"].is_long:
-            self.submit_order(Order("sell-1", "TEST", "sell", 100))
-```
-
-## 5. Run the Back-test
-
-```python
+from quantex.sources import CSVDataSource
 from quantex.backtest import BacktestRunner
 
-src = CSVSource("prices.csv")
-strat = BuyDip({"csv": src}, symbols=["TEST"], initial_cash=10_000)
-res = BacktestRunner(strat, {"csv": src}).run()
+class BuyAndHold(Strategy):
+    """A simple strategy that buys on the first bar and holds."""
 
-print(res.metrics)
-print(res.nav.tail())
+    def run(self):
+        # On the first data bar, buy 100 units and then do nothing.
+        if self.index == 0:
+            bar = self.data_sources["csv"].get_current_bar()
+            self.buy("TEST", 100, bar.timestamp)
+
+# --- Back-test Execution ---
+if __name__ == "__main__":
+    # 1. Instantiate your data source
+    data_source = CSVDataSource("prices.csv", symbol="TEST")
+    
+    # 2. Instantiate your strategy
+    strategy = BuyAndHold(
+        data_sources={"csv": data_source}, 
+        symbols=["TEST"], 
+        initial_cash=100_000
+    )
+
+    # 3. Run the back-test
+    result = BacktestRunner(strategy, {"csv": data_source}).run()
+
+    # 4. Print the results
+    print("--- METRICS ---")
+    print(result.metrics)
+    print("\n--- FINAL NAV ---")
+    print(result.nav.tail())
 ```
 
-That's it! You've executed a full strategy lifecycle using EventBus, ImmediateFillSimulator, and the data models.
+## 4. Run the Back-test
+
+Execute your strategy from the terminal:
+
+```bash
+python my_strategy.py
+```
+
+You should see output similar to this:
+
+```
+--- METRICS ---
+{'total_return': 0.0009950248756218988}
+
+--- FINAL NAV ---
+timestamp
+2024-01-01 09:30:00    100000.0
+2024-01-01 09:31:00    100020.0
+2024-01-01 09:32:00     99980.0
+2024-01-01 09:33:00     99940.0
+2024-01-01 09:34:00     99960.0
+Name: NAV, dtype: float64
+```
+
+That's it! You've successfully run a back-test.
 
 ---
 
 ### Where to Go Next
 
-* Check **Key Concepts** for deeper architectural details
-* Explore the **API Reference** for per-class docstrings
-* Contribute ideas or issues on GitHub 
+*   Check out **Key Concepts** for deeper architectural details.
+*   Explore the **API Reference** for per-class docstrings.
+*   Contribute ideas or issues on GitHub. 

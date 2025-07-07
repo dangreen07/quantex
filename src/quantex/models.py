@@ -172,7 +172,7 @@ class Position:
     @property
     def is_closed(self) -> bool:
         """Returns True if the position is closed."""
-        return (self.position - 0) < 1e-8  ## Account for floating point errors
+        return abs(self.position) < 1e-8  # Account for floating point errors
 
     def _apply_trade(self, quantity: float, price: float, timestamp: datetime):
         prev_pos = self.position

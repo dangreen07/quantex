@@ -1,6 +1,9 @@
 from quantex import DataSource
 from quantex.models import Position, Portfolio, Order
 from abc import ABC, abstractmethod
+from datetime import datetime
+from typing import Mapping
+import pandas as pd
 
 
 class Strategy(ABC):
@@ -17,10 +20,11 @@ class Strategy(ABC):
     # :pycode{_increment_index} on them **and** on the strategy to allow for
     # strategy-level book-keeping.
     index: int = 0
+    timestamp: datetime | None = None
 
     def __init__(
         self,
-        data_sources: dict[str, DataSource],
+        data_sources: Mapping[str, DataSource],
         symbols: list[str] | None = None,
         *,
         initial_cash: float = 0.0,
@@ -37,6 +41,7 @@ class Strategy(ABC):
 
         # Store references to market data sources
         self.data_sources = data_sources
+        self.timestamp = None
 
         # Maintain a portfolio to aggregate cash & PnL
         self.portfolio: Portfolio = Portfolio(cash=initial_cash)
@@ -54,6 +59,7 @@ class Strategy(ABC):
 
         # Queue of orders submitted during the current bar – cleared each step
         self._pending_orders: list[Order] = []
+        self.signals = pd.DataFrame()
 
     def _increment_index(self) -> None:
         """Advances the internal bar pointer by one.
@@ -63,14 +69,110 @@ class Strategy(ABC):
         """
         self.index += 1
 
+    def precompute_signals(self, prices: pd.DataFrame) -> None:
+        """
+        Allows a strategy to pre-compute signals or indicators in a vectorized
+        fashion before the main event loop. This is far more efficient for
+        backtesting than computing values on each bar.
+
+        Args:
+            prices: A DataFrame with timestamps as the index and symbols as
+                columns, containing the forward-filled prices for all symbols
+                in the backtest.
+        """
+        pass  # Default implementation does nothing
+
     @abstractmethod
-    def run(self):  # pragma: no cover
+    def run(self):
         """Executes the strategy logic for the current bar.
 
         Concrete strategies must override this method. It should inspect
         the available data sources and make trading decisions.
         """
         raise NotImplementedError("Subclasses must implement this method.")
+
+    def buy(
+        self, symbol: str, quantity: float, limit_price: float | None = None
+    ) -> None:
+        """Creates and submits a buy order using the current strategy timestamp.
+
+        Args:
+            symbol: The symbol to buy.
+            quantity: The quantity to buy. Must be positive.
+            limit_price: If provided, a limit order is created. Otherwise, a
+                market order is created.
+        """
+        if self.timestamp is None:
+            raise RuntimeError("Cannot place order: strategy timestamp is not set.")
+
+        order = Order(
+            id=f"buy-{symbol}-{self.timestamp}",
+            symbol=symbol,
+            side="buy",
+            quantity=quantity,
+            order_type="limit" if limit_price else "market",
+            limit_price=limit_price,
+            timestamp=self.timestamp,
+        )
+        self.submit_order(order)
+
+    def sell(
+        self, symbol: str, quantity: float, limit_price: float | None = None
+    ) -> None:
+        """Creates and submits a sell order using the current strategy timestamp.
+
+        Args:
+            symbol: The symbol to sell.
+            quantity: The quantity to sell. Must be positive.
+            limit_price: If provided, a limit order is created. Otherwise, a
+                market order is created.
+        """
+        if self.timestamp is None:
+            raise RuntimeError("Cannot place order: strategy timestamp is not set.")
+
+        order = Order(
+            id=f"sell-{symbol}-{self.timestamp}",
+            symbol=symbol,
+            side="sell",
+            quantity=quantity,
+            order_type="limit" if limit_price else "market",
+            limit_price=limit_price,
+            timestamp=self.timestamp,
+        )
+        self.submit_order(order)
+
+    def close_position(self, symbol: str) -> None:
+        """Creates and submits an order to close the entire position for a symbol.
+
+        This is a helper method that checks if a position is open for the
+        given symbol and, if so, creates a market order to close it at the
+        current strategy timestamp.
+
+        Args:
+            symbol: The symbol of the position to close.
+        """
+        if self.timestamp is None:
+            raise RuntimeError("Cannot place order: strategy timestamp is not set.")
+
+        position = self.positions.get(symbol)
+        if not position or position.is_closed:
+            return
+
+        if position.is_long:
+            side = "sell"
+            quantity = position.position
+        else:  # is_short
+            side = "buy"
+            quantity = abs(position.position)
+
+        order = Order(
+            id=f"close-{symbol}-{self.timestamp}",
+            symbol=symbol,
+            side=side,
+            quantity=quantity,
+            timestamp=self.timestamp,
+        )
+        self.submit_order(order)
 
     def submit_order(self, order: Order) -> None:
         """Queues an order to be executed by the engine.

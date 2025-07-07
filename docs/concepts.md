@@ -32,7 +32,9 @@ A strategy instance owns:
 
 * `data_sources` – mapping of name → DataSource
 * `portfolio` – holds cash & positions
-* `submit_order()` – queue orders (processed later by the execution layer)
+* `buy()`, `sell()` – helpers to create market or limit orders.
+* `close_position()` – helper to exit a position for a given symbol.
+* `submit_order()` – the underlying method to queue any `Order` object.
 
 Because strategies share a code-path between back-test and live trading, sticking to the public API keeps you portable.
 

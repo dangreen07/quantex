@@ -1,7 +1,8 @@
 import pandas as pd
+from datetime import datetime
 
 from quantex.sources import BacktestingDataSource
-from quantex.models import Bar, Order
+from quantex.models import Bar
 from quantex.strategy import Strategy
 from quantex.backtest import BacktestRunner
 
@@ -10,7 +11,9 @@ class DummyDataSource(BacktestingDataSource):
     """Very small in-memory OHLCV data source for testing."""
 
     def __init__(self, prices, symbol: str = "TEST"):
-        ts_index = pd.date_range("2024-01-01", periods=len(prices), freq="min")
+        ts_index = pd.to_datetime(
+            pd.date_range("2024-01-01", periods=len(prices), freq="min")
+        )
         self._df = pd.DataFrame(
             {
                 "open": prices,
@@ -30,6 +33,12 @@ class DummyDataSource(BacktestingDataSource):
     def __len__(self):  # noqa: D401 – simple method
         return len(self._df)
 
+    def peek_timestamp(self) -> datetime | None:
+        """Peeks at the timestamp of the next available bar."""
+        if self.index < len(self):
+            return self._df.index[self.index]
+        return None
+
     def get_current_bar(self):  # noqa: D401
         row = self._df.iloc[self.index]
         ts = self._df.index[self.index]
@@ -47,31 +56,22 @@ class DummyDataSource(BacktestingDataSource):
         start = max(0, self.index - lookback_period + 1)
         return self._df.iloc[start : self.index + 1].copy()
 
+    def get_raw_data(self) -> pd.DataFrame:
+        return self._df
+
 
 class BuyHoldStrategy(Strategy):
     """Buys on the first bar, sells on the last bar."""
 
     def run(self):
-        ds = self.data_sources["source"]
-        current_bar = ds.get_current_bar()
+        source = self.data_sources.get("source")
+        if not isinstance(source, DummyDataSource):
+            return  # Or raise an error, depending on desired strictness
+
         if self.index == 0:
-            self.submit_order(
-                Order(
-                    id="buy",
-                    symbol=str(current_bar.symbol),
-                    side="buy",
-                    quantity=10,
-                )
-            )
-        elif self.index == len(ds) - 1:  # type: ignore[arg-type]
-            self.submit_order(
-                Order(
-                    id="sell",
-                    symbol=str(current_bar.symbol),
-                    side="sell",
-                    quantity=10,
-                )
-            )
+            self.buy(str(source.symbol), 10)
+        elif self.index == len(source) - 1:
+            self.close_position(str(source.symbol))
 
 
 def test_backtest_runner_basic():
