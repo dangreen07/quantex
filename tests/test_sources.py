@@ -2,6 +2,7 @@ import pytest
 import pandas as pd
 from quantex.sources import DataSource, BacktestingDataSource
 
+
 def test_datasource_methods_raise_notimplemented():
     """Base DataSource methods should raise NotImplementedError when called directly."""
     ds = DataSource()
@@ -34,7 +35,7 @@ class DummyDataSource(DataSource):
 
     def get_data_before_idx(self, idx: int, lookback_period: int):
         start = max(0, idx - lookback_period + 1)
-        return self._df.iloc[start: idx + 1].copy()
+        return self._df.iloc[start : idx + 1].copy()
 
 
 class DummyBacktestingDataSource(BacktestingDataSource):
@@ -51,7 +52,7 @@ class DummyBacktestingDataSource(BacktestingDataSource):
 
     def get_data_before_idx(self, idx: int, lookback_period: int):
         start = max(0, idx - lookback_period + 1)
-        return self._df.iloc[start: idx + 1].copy()
+        return self._df.iloc[start : idx + 1].copy()
 
 
 def test_dummy_datasource_returns_correct_row_and_window():
