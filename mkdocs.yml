@@ -1,0 +1,18 @@
+site_name: QuantEx
+site_description: Documentation for QuantEx
+theme:
+  name: material
+nav:
+  - Home: index.md
+  - API Reference:
+      - Models: reference/quantex.models.md
+      - Sources: reference/quantex.sources.md
+      - Strategy: reference/quantex.strategy.md
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths:
+            - .
+            - ./src

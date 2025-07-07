@@ -23,4 +23,4 @@ def test_strategy_run_strategy_raises():
     ds = DummyDataSource()
     strat = Strategy({"dummy": ds})
     with pytest.raises(NotImplementedError):
-        strat.run_strategy(0)
+        strat.run()

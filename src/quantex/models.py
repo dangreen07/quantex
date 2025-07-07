@@ -103,6 +103,18 @@ class Position:
         self.average_price: float = 0.0
         self.realized_pnl: float = 0.0
 
+    @property
+    def is_long(self) -> bool:
+        return self.position > 0
+
+    @property
+    def is_short(self) -> bool:
+        return self.position < 0
+
+    @property
+    def is_closed(self) -> bool:
+        return (self.position - 0) < 1e-8  ## Account for floating point errors
+
     # Re-use calculation logic from previous Positions implementation
     def _apply_trade(self, quantity: float, price: float, timestamp: datetime):
         prev_pos = self.position
@@ -133,12 +145,12 @@ class Position:
         self.trades.append(Trade(self.symbol, price, quantity, timestamp))
 
     # Public helpers
-    def buy(self, quantity: float, price: float, timestamp: datetime):
+    def buy(self, price: float, timestamp: datetime, quantity: float = 1):
         if quantity <= 0:
             raise ValueError("quantity must be positive for buy")
         self._apply_trade(quantity, price, timestamp)
 
-    def sell(self, quantity: float, price: float, timestamp: datetime):
+    def sell(self, price: float, timestamp: datetime, quantity: float = 1):
         if quantity <= 0:
             raise ValueError("quantity must be positive for sell")
         self._apply_trade(-quantity, price, timestamp)
