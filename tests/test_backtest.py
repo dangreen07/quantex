@@ -86,3 +86,7 @@ def test_backtest_runner_basic():
     assert len(result.nav) == len(prices)
     # Total return should not be zero because price moved
     assert result.metrics["total_return"] != 0
+
+    # Sharpe ratio should be computed and finite
+    assert "sharpe_ratio" in result.metrics
+    assert result.metrics["sharpe_ratio"] is not None
