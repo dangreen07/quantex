@@ -12,7 +12,7 @@ from quantex.models import Bar
 from abc import ABC, abstractmethod
 
 
-class DataSource(ABC):  # pylint: disable=too-few-public-methods
+class DataSource(ABC):
     """Abstract data source for providing market data.
 
     Implementations must provide the *current* bar via `get_current_bar`

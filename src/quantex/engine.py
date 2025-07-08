@@ -55,31 +55,48 @@ class EventBus:
         self._price_df: pd.DataFrame | None = None
 
     def _precompute_timeline(self) -> None:
-        """Creates a strictly increasing, duplicate-free timeline from sources.
+        """Computes a *synchronised* global timeline.
 
-        Using ``Index.union`` maintains order guarantees and avoids the cost of
-        constructing large Python ``set`` objects for millions of timestamps.
-        This also fixes a bug where duplicate timestamps across sources could
-        inflate the timeline length and dramatically slow the backtest.
+        The timeline now contains **only** those timestamps that are present in
+        *all* data sources (i.e. the set intersection). This guarantees that
+        every bar processed by the engine has a corresponding observation for
+        every symbol, removing the need for forward-filling or other alignment
+        work-arounds downstream.
         """
 
-        timeline: pd.Index = pd.Index([])  # start empty
+        timeline: pd.Index | None = None
         for ds in self.data_sources.values():
-            timeline = timeline.union(ds.get_raw_data().index)
+            idx = ds.get_raw_data().index
+            timeline = idx if timeline is None else timeline.intersection(idx)
 
-        # ``union`` returns a sorted, unique index by default – store as list of
-        # python ``Timestamp`` objects for fast attribute access inside the loop.
-        self._timeline = timeline.to_list()
+        # No common timestamps → empty timeline
+        if timeline is None:
+            self._timeline = []
+        else:
+            # ``intersection`` preserves order of the left operand, but we
+            # explicitly sort to ensure monotonically increasing timestamps.
+            self._timeline = timeline.sort_values().to_list()
 
     def _precompute_price_data(self) -> None:
-        """Creates a unified dataframe of close prices for all symbols."""
-        price_dfs = {}
-        for name, ds in self.data_sources.items():
+        """Builds a price matrix strictly aligned to the global timeline."""
+
+        # Gather close price series for each symbol
+        price_series: dict[str, pd.Series] = {}
+        for _, ds in self.data_sources.items():
             raw_data = ds.get_raw_data()
             if "close" in raw_data.columns and ds.symbol:
-                price_dfs[ds.symbol] = raw_data["close"]
+                price_series[ds.symbol] = raw_data["close"]
 
-        self._price_df = pd.DataFrame(price_dfs).ffill()
+        # Assemble into a single DataFrame and forward-fill within each column
+        price_df = pd.DataFrame(price_series).sort_index().ffill()
+
+        # Restrict to *only* the timestamps present in ``self._timeline`` so the
+        # row index aligns 1-to-1 with the event loop.
+        if self._timeline:
+            price_df = price_df.loc[self._timeline]
+
+        self._price_df = price_df
+
         if not self._price_df.empty:
             self._price_array = self._price_df.to_numpy(dtype=float)
             self._symbols = list(self._price_df.columns)

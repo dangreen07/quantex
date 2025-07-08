@@ -114,26 +114,16 @@ def test_event_bus_timestamp_synchronization():
     event_bus = EventBus(strategy, data_sources, simulator)
     strategy.event_bus = event_bus  # type: ignore
 
-    # --- Run ---
     event_bus.run()
 
-    # --- Assertions ---
-    # 1. The bus should have processed 4 unique timestamps in the correct order
     event_timestamps = [e[0] for e in strategy.events]
-    expected_timestamps = [ts[0], ts[1], ts[2], ts[3]]
+    expected_timestamps = [ts[0]]  # Only the first timestamp exists in both ds1 & ds2
     assert event_timestamps == expected_timestamps
     assert event_bus.timestamps == expected_timestamps
 
-    # 2. Check forward-filling of prices at each step
-    event_prices = [e[1] for e in strategy.events]
-    # T1 (ts[0]): Both A and B have data
-    assert event_prices[0] == {"A": 100, "B": 200}
-    # T2 (ts[1]): Only B has new data, A's price is from T1
-    assert event_prices[1] == {"A": 100, "B": 201}
-    # T3 (ts[2]): Only A has new data, B's price is from T2
-    assert event_prices[2] == {"A": 102, "B": 201}
-    # T4 (ts[3]): Only B has new data, A's price is from T3
-    assert event_prices[3] == {"A": 102, "B": 203}
+    # Each processed event must include prices for *all* symbols with no NaNs
+    assert len(strategy.events) == 1
+    assert strategy.events[0][1] == {"A": 100, "B": 200}
 
 
 class NoOpStrategy(Strategy):
