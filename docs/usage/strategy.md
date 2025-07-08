@@ -37,6 +37,8 @@ class SMACross(Strategy):
 | `price_history` | **DataFrame** of aligned prices for *all* symbols up to the current bar. |
 | `get_lookback_prices(n)` | Returns the last *n* aligned rows (auto-truncated if history is shorter). |
 
+> **No NaNs by design** – Because the engine processes only timestamps that are present **in all data sources**, every row returned by `price_history` or `get_lookback_prices()` contains a value for each symbol.  You can safely rely on these helper methods being free of missing data without additional forward-filling.
+
 ## Lifecycle
 
 Each bar the engine:

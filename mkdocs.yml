@@ -4,7 +4,6 @@ theme:
   name: material
 nav:
   - Home: index.md
-  - Quick-Start: quickstart.md
   - Guides:
       - Strategies: usage/strategy.md
       - Data Sources: usage/data-sources.md
@@ -28,4 +27,4 @@ plugins:
           options:
             docstring_style: google
   - to-pdf:
-      raise_on_warnings: false
+      enabled_if_env: ENABLE_PDF_EXPORT

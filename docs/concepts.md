@@ -42,11 +42,13 @@ Because strategies share a code-path between back-test and live trading, stickin
 
 The `EventBus` keeps time in sync across all data sources:
 
-1. Snapshot current bars & create a price dictionary
+1. Snapshot current bars & create a price dictionary *(common timeline, see note below)*
 2. Call `strategy.run()` (strategy may queue orders)
 3. Forward queued orders to an `ImmediateFillSimulator`
 4. Update NAV, record the timestamp
 5. Increment indices
+
+> **Timeline semantics** – QuantEx now uses the **intersection** of all data-source indices as its global timeline. This means a bar is processed **only if every source provides a record for that exact timestamp**. Missing observations are *not* forward-filled across symbols; instead the bar is skipped entirely. This guarantees that strategy helpers (e.g. `get_price`, `price_history`) never encounter `NaN` values.
 
 `ImmediateFillSimulator` converts `Order`s into `Fill`s at the bar's *close* price and updates the portfolio.
 
