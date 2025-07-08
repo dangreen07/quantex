@@ -173,7 +173,9 @@ class ParquetDataSource(BacktestingDataSource):
             symbol: Optional symbol name. If omitted, the stem of the path is
                 used instead.
         """
-        self.path = Path(path)
+        if not isinstance(path, Path):
+            path = Path(path)
+        self.path = path
         if not self.path.exists():
             raise FileNotFoundError(self.path)
 

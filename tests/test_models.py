@@ -38,6 +38,81 @@ def test_order_and_fill_dataclasses():
     assert fill.price == 100.5
 
 
+@pytest.mark.parametrize(
+    "side,qty,order_type,limit_price,err_msg",
+    [
+        ("hold", 10, "market", None, "side must be 'buy' or 'sell'"),
+        ("buy", 0, "market", None, "quantity must be positive"),
+        ("buy", -5, "market", None, "quantity must be positive"),
+        ("buy", 1, "limit", None, "limit_price required for limit order"),
+    ],
+)
+def test_order_validation(side, qty, order_type, limit_price, err_msg):
+    """Order dataclass should reject invalid combinations in __post_init__."""
+
+    with pytest.raises(ValueError, match=err_msg):
+        Order(
+            id="X",
+            symbol="TEST",
+            side=side,
+            quantity=qty,
+            order_type=order_type,
+            limit_price=limit_price,
+            timestamp=datetime.now(),
+        )
+
+
+def test_fill_value_sign():
+    """Fill.value() should be negative for buys and positive for sells."""
+    ts = datetime.now()
+    buy_fill = Fill(order_id="1", symbol="A", quantity=10, price=5.0, timestamp=ts)
+    sell_fill = Fill(order_id="2", symbol="A", quantity=-10, price=5.0, timestamp=ts)
+
+    assert buy_fill.value() == pytest.approx(-50.0)
+    assert sell_fill.value() == pytest.approx(50.0)
+
+
+def test_position_is_short_property():
+    """is_short should reflect negative position size."""
+    now = datetime.now()
+    pos = Position("TEST")
+    pos.sell(5, 10, now)
+    assert pos.is_short is True
+    assert pos.is_long is False
+
+
+@pytest.mark.parametrize("method", ["buy", "sell"])
+def test_position_quantity_validation(method):
+    """Buying/selling non-positive qty should raise ValueError."""
+    pos = Position("TEST")
+    with pytest.raises(ValueError):
+        if method == "buy":
+            pos.buy(0, 10, datetime.now())  # type: ignore[arg-type]
+        else:
+            pos.sell(0, 10, datetime.now())  # type: ignore[arg-type]
+
+
+def test_portfolio_unrealized_pnl_and_repr():
+    """Verify unrealized PnL calculation and __repr__ formatting."""
+    ts = datetime.now()
+    portfolio = Portfolio(cash=0)
+
+    # Buy 10 shares of X @ 10, Buy 5 shares of Y @ 20
+    portfolio.process_fill(
+        Fill(order_id="1", symbol="X", quantity=10, price=10, timestamp=ts)
+    )
+    portfolio.process_fill(
+        Fill(order_id="2", symbol="Y", quantity=5, price=20, timestamp=ts)
+    )
+
+    prices = {"X": 12.0, "Y": 18.0}
+    # Unrealized: (12-10)*10 + (18-20)*5 = 20 - 10 = 10
+    assert portfolio.unrealized_pnl(prices) == pytest.approx(10.0)
+
+    repr_str = repr(portfolio)
+    assert "Portfolio(" in repr_str and "cash=" in repr_str and "positions=" in repr_str
+
+
 def test_position_buy_sell_and_pnl():
     ts = datetime.now()
     pos = Position("AAPL")

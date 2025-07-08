@@ -182,10 +182,6 @@ class Strategy(ABC):
         orders, self._pending_orders = self._pending_orders, []
         return orders
 
-    # ------------------------------------------------------------------
-    # Convenience helpers for strategy authors
-    # ------------------------------------------------------------------
-
     def get_price(self, symbol: str) -> float:
         """Returns the latest price for *symbol*.
 
@@ -209,10 +205,73 @@ class Strategy(ABC):
             raise RuntimeError("Market data not yet initialised for this bar.")
         return {sym: float(price) for sym, price in zip(self._symbols, self._price_row)}
 
+    def _get_price_history_df(self) -> pd.DataFrame:
+        """Internal helper to fetch the full, forward-filled price DataFrame.
+
+        Returns:
+            pd.DataFrame: Price data for *all* symbols in the backtest universe
+                (columns) indexed by the global event timeline. Values are
+                forward-filled by the engine ensuring there are no missing
+                timestamps – ideal for multi-asset lookback computations.
+
+        Raises:
+            RuntimeError: If the strategy is not attached to an *EventBus* or
+                if the price DataFrame has not been initialised yet (i.e. the
+                first bar has not been processed).
+        """
+
+        event_bus = getattr(self, "event_bus", None)
+        if event_bus is None:
+            raise RuntimeError(
+                "Strategy is not attached to an EventBus; price history unavailable."
+            )
+
+        price_df: pd.DataFrame | None = (
+            event_bus._price_df
+        )  # pylint: disable=protected-access
+        if price_df is None:
+            raise RuntimeError(
+                "Price history not yet initialised – wait until the first bar has been processed."
+            )
+
+        return price_df
+
+    @property
+    def price_history(self) -> pd.DataFrame:  # noqa: D401 – property describing data
+        """Price history up to *and including* the current bar.
+
+        Example:
+            >>> history = self.price_history
+            >>> latest_btc = history["BTC"].iloc[-1]
+        """
+
+        df = self._get_price_history_df()
+        # ``self.index`` corresponds to the *current* bar position
+        return df.iloc[: self.index + 1]
+
+    def get_lookback_prices(self, lookback_period: int) -> pd.DataFrame:
+        """Returns an *aligned* lookback window for all symbols.
+
+        Args:
+            lookback_period: Number of bars (inclusive of the current bar) to
+                return.
+
+        Returns:
+            pd.DataFrame: DataFrame with the last *lookback_period* rows from
+            :pyattr:`price_history`. If there are fewer than *lookback_period*
+            observations available (e.g. at the beginning of a backtest), the
+            entire available history is returned instead. The returned frame
+            is guaranteed to be free of missing timestamps across symbols due
+            to the forward-filling performed by the engine.
+        """
+
+        history = self.price_history
+        if len(history) < lookback_period:
+            return history.copy()
+        return history.iloc[-lookback_period:].copy()
+
     # Called by EventBus – should be considered *private*
-    def _update_market_data(
-        self, price_row, symbols, symbol_idx
-    ):  # noqa: D401 – internal
+    def _update_market_data(self, price_row, symbols, symbol_idx):
         self._price_row = price_row
         self._symbols = symbols
         self._symbol_idx = symbol_idx

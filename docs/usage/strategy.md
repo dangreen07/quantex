@@ -34,6 +34,8 @@ class SMACross(Strategy):
 | `close_position(symbol)` | Market-closes any open position. |
 | `get_price(symbol)` | O(1) latest price lookup via NumPy. |
 | `prices` | Dict of symbol→price for current bar. |
+| `price_history` | **DataFrame** of aligned prices for *all* symbols up to the current bar. |
+| `get_lookback_prices(n)` | Returns the last *n* aligned rows (auto-truncated if history is shorter). |
 
 ## Lifecycle
 

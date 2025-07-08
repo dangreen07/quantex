@@ -134,3 +134,152 @@ def test_event_bus_timestamp_synchronization():
     assert event_prices[2] == {"A": 102, "B": 201}
     # T4 (ts[3]): Only B has new data, A's price is from T3
     assert event_prices[3] == {"A": 102, "B": 203}
+
+
+class NoOpStrategy(Strategy):
+    """Strategy that does nothing – useful for engine edge-case tests."""
+
+    def run(self):
+        pass  # pragma: no cover – engine behaviour under test, not strategy logic
+
+
+def test_event_bus_early_return_when_no_price_data():
+    """EventBus.run should exit early if _price_df remains *None*."""
+
+    # Create subclass that skips price pre-computation to simulate a bug / edge-case
+    class BareEventBus(EventBus):
+        def _precompute_price_data(self):
+            # Intentionally do *not* set self._price_df – keeps it None
+            return None
+
+    strategy = NoOpStrategy({}, symbols=[])
+    bus = BareEventBus(
+        strategy=strategy,
+        data_sources={},
+        simulator=ImmediateFillSimulator(strategy.portfolio),
+    )
+
+    # Nothing should blow up – nav/timestamps stay empty
+    bus.run()
+    assert bus.nav == []
+    assert bus.timestamps == []
+
+
+def test_strategy_index_increments_to_timeline_length():
+    """After EventBus.run the strategy.index should equal the timeline length."""
+
+    # Synthetic 3-bar, single-symbol dataset
+    idx = pd.date_range("2025-01-01 00:00", periods=3, freq="min", tz="UTC")
+    df = pd.DataFrame(
+        {
+            "open": [1, 2, 3],
+            "high": [1, 2, 3],
+            "low": [1, 2, 3],
+            "close": [1, 2, 3],
+            "volume": [0, 0, 0],
+        },
+        index=idx,
+    )
+
+    class DFSource(BacktestingDataSource):
+        def __init__(self, frame):
+            self._df = frame
+            self.symbol = "TST"
+            self.index = 0
+
+        def __len__(self):
+            return len(self._df)
+
+        def get_raw_data(self):
+            return self._df
+
+        def peek_timestamp(self):
+            if self.index < len(self):
+                return self._df.index[self.index]
+            return None
+
+        def get_current_bar(self):
+            row = self._df.iloc[self.index]
+            ts = self._df.index[self.index]
+            return Bar(
+                ts, row.open, row.high, row.low, row.close, row.volume, self.symbol
+            )
+
+        def get_lookback_data(self, lookback_period):
+            raise NotImplementedError
+
+    ds = DFSource(df)
+    strat = NoOpStrategy({"src": ds}, symbols=["TST"])
+    bus = EventBus(strat, {"src": ds}, ImmediateFillSimulator(strat.portfolio))
+
+    bus.run()
+
+    # 3 bars processed → index should be 3
+    assert strat.index == 3
+
+
+def test_order_execution_and_missing_symbol_guard():
+    """Ensure EventBus executes orders only for symbols present in price matrix."""
+
+    # One time index
+    ts = pd.date_range("2025-02-01", periods=1, freq="min", tz="UTC")
+
+    df = pd.DataFrame(
+        {
+            "open": [10.0],
+            "high": [10.0],
+            "low": [10.0],
+            "close": [10.0],
+            "volume": [0],
+        },
+        index=ts,
+    )
+
+    # Simple DataSource using DataFrame (reuse DFSource logic from previous test)
+
+    class DFSource(BacktestingDataSource):
+        def __init__(self, frame):
+            self._df = frame
+            self.symbol = "VAL"
+            self.index = 0
+
+        def __len__(self):
+            return len(self._df)
+
+        def get_raw_data(self):
+            return self._df
+
+        def peek_timestamp(self):
+            if self.index < len(self):
+                return self._df.index[self.index]
+            return None
+
+        def get_current_bar(self):
+            row = self._df.iloc[self.index]
+            ts_ = self._df.index[self.index]
+            return Bar(
+                ts_, row.open, row.high, row.low, row.close, row.volume, self.symbol
+            )
+
+        def get_lookback_data(self, lookback_period):
+            raise NotImplementedError
+
+    class OrderGeneratingStrategy(Strategy):
+        def run(self):
+            if self.index == 0:
+                # Valid order
+                self.buy("VAL", 1)
+                # Invalid symbol that is not in price table
+                self.buy("MISS", 1)
+
+    ds = DFSource(df)
+    strat = OrderGeneratingStrategy({"src": ds}, symbols=["VAL"], initial_cash=100)
+    bus = EventBus(strat, {"src": ds}, ImmediateFillSimulator(strat.portfolio))
+
+    bus.run()
+
+    # Only one order should be filled (for VAL); MISS skipped
+    assert len(bus.fills) == 1
+    assert bus.fills[0].symbol == "VAL"
+    # Both orders recorded
+    assert len(bus.orders) == 2

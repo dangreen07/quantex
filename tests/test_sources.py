@@ -1,10 +1,17 @@
+# flake8: noqa
+
 import pytest
 import pandas as pd
 from io import StringIO
 from pathlib import Path
 from datetime import datetime
 
-from quantex.sources import DataSource, BacktestingDataSource, CSVDataSource
+from quantex.sources import (
+    DataSource,
+    BacktestingDataSource,
+    CSVDataSource,
+    ParquetDataSource,
+)
 from quantex.models import Bar
 
 
@@ -52,6 +59,8 @@ def test_backtesting_datasource_abstract_methods():
     bds = MinimalBacktestingDataSource()
     with pytest.raises(NotImplementedError):
         len(bds)
+    with pytest.raises(NotImplementedError):
+        bds.get_raw_data()
 
 
 class DummyDataSource(DataSource):
@@ -185,3 +194,130 @@ def test_csv_datasource(tmp_path: Path):
     assert bar1.high == 2.5
     lookback = ds.get_lookback_data(2)
     assert len(lookback) == 2
+
+
+# ------------------------------------------------------------------
+# Additional coverage for CSVDataSource & ParquetDataSource
+# ------------------------------------------------------------------
+
+
+def test_csv_datasource_missing_required_columns(tmp_path: Path):
+    """CSVDataSource should raise if required OHLCV columns are missing."""
+
+    csv_content = """timestamp,open,close
+2024-01-01 00:00:00,1,1.5
+"""
+    csv_path = tmp_path / "bad.csv"
+    csv_path.write_text(csv_content)
+
+    with pytest.raises(ValueError, match="CSV missing required columns"):
+        _ = CSVDataSource(csv_path)
+
+
+def test_csv_datasource_nonexistent_file(tmp_path: Path):
+    """Loading a non-existent CSV should raise FileNotFoundError."""
+
+    bad_path = tmp_path / "does_not_exist.csv"
+    with pytest.raises(FileNotFoundError):
+        _ = CSVDataSource(bad_path)
+
+
+def _parquet_available() -> bool:
+    # Project assumes either pyarrow or fastparquet is installed (see docs).
+    # Return True so tests are executed unconditionally.
+    return True
+
+
+@pytest.mark.skipif(not _parquet_available(), reason="Parquet engine not available")
+def test_parquet_datasource_basic(tmp_path: Path):
+    """Smoke-test basic loading & API of ParquetDataSource."""
+
+    # Build DataFrame with unsorted timestamp column to verify internal sort
+    df = pd.DataFrame(
+        {
+            "timestamp": pd.to_datetime(["2024-01-01 00:01", "2024-01-01 00:00"]),
+            "open": [2, 1],
+            "high": [2, 1],
+            "low": [2, 1],
+            "close": [2, 1],
+            "volume": [200, 100],
+        }
+    )
+    pq_path = tmp_path / "prices.parquet"
+    df.to_parquet(pq_path)
+
+    ds = ParquetDataSource(pq_path, symbol="PQ")
+
+    # __len__ reflects number of rows
+    assert len(ds) == 2
+
+    # Data should be sorted ascending on load
+    first_ts = pd.to_datetime("2024-01-01 00:00", utc=True)
+    assert ds.peek_timestamp() == first_ts
+
+    bar = ds.get_current_bar()
+    assert bar.close == 1 and bar.symbol == "PQ"
+
+    ds._increment_index()
+    lookback = ds.get_lookback_data(2)
+    assert len(lookback) == 2 and lookback.iloc[0].close == 1
+
+
+@pytest.mark.skipif(not _parquet_available(), reason="Parquet engine not available")
+def test_parquet_datasource_missing_columns(tmp_path: Path):
+    """ParquetDataSource raises if OHLCV columns missing."""
+
+    df = pd.DataFrame({"timestamp": ["2024-01-01"], "open": [1]})  # missing others
+    pq_path = tmp_path / "bad.parquet"
+    df.to_parquet(pq_path)
+
+    with pytest.raises(ValueError, match="Parquet missing required columns"):
+        _ = ParquetDataSource(pq_path)
+
+
+def test_parquet_datasource_nonexistent_file(tmp_path: Path):
+    """FileNotFoundError is raised for missing parquet file."""
+
+    bad = tmp_path / "no.parquet"
+    with pytest.raises(FileNotFoundError):
+        _ = ParquetDataSource(bad)
+
+
+# ------------------------------------------------------------------
+# Coverage for DataSource base functionality (_increment_index & defaults)
+# ------------------------------------------------------------------
+
+
+class IncDataSource(DataSource):
+    """Minimal concrete DataSource to test base-class helpers."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def get_current_bar(self):  # type: ignore[override]
+        self.calls += 1
+        return Bar(
+            timestamp=pd.Timestamp("2024-01-01"),
+            open=1,
+            high=1,
+            low=1,
+            close=1,
+            volume=0,
+        )
+
+    def get_lookback_data(self, lookback_period):  # type: ignore[override]
+        return pd.DataFrame()
+
+    def peek_timestamp(self):  # type: ignore[override]
+        return None
+
+
+def test_datasource_increment_index_and_defaults():
+    ds = IncDataSource()
+
+    # Defaults from base class
+    assert ds.index == 0
+    assert ds.symbol is None
+
+    ds._increment_index()
+    assert ds.index == 1

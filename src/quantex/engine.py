@@ -44,6 +44,8 @@ class EventBus:
         self.data_sources = data_sources
         self.simulator = simulator
 
+        setattr(self.strategy, "event_bus", self)
+
         self.orders: list[Order] = []
         self.fills: list[Fill] = []
         self.nav: list[float] = []

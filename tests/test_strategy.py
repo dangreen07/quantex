@@ -87,3 +87,64 @@ class TestStrategyHelpers:
             strategy.sell("TEST", 1)
         with pytest.raises(RuntimeError, match="timestamp is not set"):
             strategy.close_position("TEST")
+
+    # ------------------------------------------------------------------
+    # New tests covering get_price / prices helpers and price history fetcher
+    # ------------------------------------------------------------------
+
+    def test_get_price_and_prices_helpers(self):
+        strat = DummyStrategy({}, symbols=["AAA", "BBB"])
+
+        # Prepare fake market data injected by EventBus
+        price_row = [1.0, 2.0]
+        symbols = ["AAA", "BBB"]
+        symbol_idx = {"AAA": 0, "BBB": 1}
+
+        # Inject internals manually (simulate EventBus._update_market_data)
+        strat._update_market_data(price_row, symbols, symbol_idx)  # type: ignore[attr-defined]
+
+        # get_price returns correct value
+        assert strat.get_price("AAA") == 1.0
+        assert strat.get_price("BBB") == 2.0
+
+        # prices dict reflects both
+        assert strat.prices == {"AAA": 1.0, "BBB": 2.0}
+
+        # Unknown symbol raises KeyError
+        with pytest.raises(KeyError):
+            strat.get_price("MISSING")
+
+    def test_get_price_runtime_error_when_uninitialised(self):
+        strat = DummyStrategy({}, symbols=["X"])
+        with pytest.raises(RuntimeError, match="Market data not yet initialised"):
+            _ = strat.get_price("X")
+
+        with pytest.raises(RuntimeError, match="Market data not yet initialised"):
+            _ = strat.prices
+
+    def test_get_price_history_df_errors_and_success(self):
+        strat = DummyStrategy({}, symbols=["X"])
+
+        # No event_bus attached
+        with pytest.raises(RuntimeError, match="Strategy is not attached"):
+            _ = strat._get_price_history_df()  # type: ignore[attr-defined]
+
+        # Attach event_bus but with _price_df None – should raise second error
+        class FakeBus:
+            def __init__(self):
+                self._price_df = None  # type: ignore[var-annotated]
+
+        fake_bus = FakeBus()
+        strat.event_bus = fake_bus  # type: ignore[attr-defined]
+        with pytest.raises(RuntimeError, match="Price history not yet initialised"):
+            _ = strat._get_price_history_df()  # type: ignore[attr-defined]
+
+        # Provide actual DataFrame
+        import pandas as pd
+
+        df = pd.DataFrame({"X": [1, 2, 3]})
+        fake_bus._price_df = df  # type: ignore[attr-defined]
+
+        # Should now return the DataFrame
+        returned = strat._get_price_history_df()  # type: ignore[attr-defined]
+        assert returned.equals(df)
