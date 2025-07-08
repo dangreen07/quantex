@@ -11,7 +11,7 @@ This module exposes:
 
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Dict
+from typing import Mapping
 
 import pandas as pd
 
@@ -43,7 +43,7 @@ class BacktestRunner:
     """User-facing helper that wires Strategy, EventBus, and Simulator."""
 
     def __init__(
-        self, strategy: Strategy, data_sources: Dict[str, BacktestingDataSource]
+        self, strategy: Strategy, data_sources: Mapping[str, BacktestingDataSource]
     ):
         """Initializes the BacktestRunner.
 
