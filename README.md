@@ -37,26 +37,6 @@ all without the heavy overhead of larger, more opinionated quant libraries.
 
 ---
 
-## Project Layout
-```
-Quant-Trading/
-└── quantex/             # Python package root (this repo)
-    ├── src/quantex/     # Source code
-    │   ├── __init__.py
-    │   ├── sources.py  # DataSource abstractions
-    │   └── strategy.py # Strategy abstractions
-    ├── tests/          # Pytest test-suite
-        ├── __init__.py
-        ├── test_sources.py   # DataSource behaviours
-        ├── test_models.py    # Core data-model & PnL maths
-        └── test_strategy.py  # Strategy base-class contract
-    ├── poetry.lock     # Locked dependency versions
-    ├── pyproject.toml  # Poetry & build metadata
-    └── README.md       # ← you are here
-```
-
----
-
 ## Installation
 Quantex is managed with [Poetry](https://python-poetry.org/). Clone the
 repository and install the dependencies in an isolated virtual environment:

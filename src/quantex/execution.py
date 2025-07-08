@@ -62,6 +62,14 @@ class ImmediateFillSimulator:
             The created Fill object.
         """
 
+        if order.side == "buy":
+            required_cash = order.quantity * execution_price + self.commission
+            if required_cash > self.portfolio.cash:
+                raise ValueError(
+                    "Insufficient cash to execute buy order: "
+                    f"required={required_cash:.2f}, available={self.portfolio.cash:.2f}"
+                )
+
         signed_qty = order.quantity if order.side == "buy" else -order.quantity
 
         fill = Fill(

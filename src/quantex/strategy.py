@@ -66,6 +66,26 @@ class Strategy(ABC):
         self._symbols: list[str] | None = None
         self._symbol_idx: dict[str, int] | None = None
 
+    # ------------------------------------------------------------------
+    # Convenience Properties
+    # ------------------------------------------------------------------
+
+    @property
+    def cash(self) -> float:
+        """Current available cash in the underlying Portfolio.
+
+        Example:
+            ```python
+            if self.cash > 10_000:
+                self.buy("AAPL", 5)
+            ```
+
+        Returns:
+            float: The cash balance that can be deployed for new positions.
+        """
+
+        return self.portfolio.cash
+
     def _increment_index(self) -> None:
         """Advances the internal bar pointer by one.
 
