@@ -241,8 +241,8 @@ class Strategy(ABC):
         """Price history up to *and including* the current bar.
 
         Example:
-            >>> history = self.price_history
-            >>> latest_btc = history["BTC"].iloc[-1]
+            > history = self.price_history
+            > latest_btc = history["BTC"].iloc[-1]
         """
 
         df = self._get_price_history_df()
