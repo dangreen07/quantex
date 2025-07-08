@@ -2,14 +2,8 @@ name: Deploy Docs
 
 on:
   push:
-    branches: [ main ]  # adjust if default branch is different
-    paths:
-      - 'docs/**'
-      - 'mkdocs.yml'
-  workflow_dispatch:
+    branches: [ main ]
 
-    
-# Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
 permissions:
   contents: read
   pages: write

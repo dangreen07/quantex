@@ -1,3 +1,26 @@
+"""quantex.execution — Execution utilities.
+
+This module implements *ImmediateFillSimulator*, a zero-latency execution
+engine used by the Quantex backtesting framework.
+
+ImmediateFillSimulator converts strategy-generated `quantex.models.Order`
+objects directly into `quantex.models.Fill` objects at the supplied
+execution price, then updates the provided `quantex.models.Portfolio` so
+metrics such as positions, cash, and equity remain consistent during a
+backtest.
+
+Key characteristics:
+    * **Immediate fills** – no market latency, orders are filled in the
+      same timestamp they are received.
+    * **Configurable commission** – per-fill commission (default *0.0*) to
+      approximate transaction costs. Slippage is currently assumed to be
+      zero but can be incorporated in future extensions.
+
+This concise implementation serves as a reference template; more
+sophisticated execution models (e.g., with latency, partial fills, or
+order books) can inherit from or replace this class in future versions.
+"""
+
 from __future__ import annotations
 
 from datetime import datetime

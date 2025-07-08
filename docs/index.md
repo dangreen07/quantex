@@ -28,7 +28,7 @@ poetry install
 
 ## Next Steps
 
-* Browse the **API Reference** for full docstrings of each sub-module.
+* Browse the [**API Reference**](reference/quantex.models.md) for full docstrings of each sub-module.
 * Contribute improvements or raise issues on GitHub!
 
 Happy trading 🐍💹 

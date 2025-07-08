@@ -1,9 +1,9 @@
 # Backtesting Engine
 
-At runtime the **EventBus** orchestrates the data flow between:
-1. Data sources → provide market data.
-2. Strategy → consumes data & produces orders.
-3. Execution simulator → turns orders into fills.
+At runtime the **EventBus** orchestrates the data flow between:  
+1. Data sources → provide market data.  
+2. Strategy → consumes data & produces orders.  
+3. Execution simulator → turns orders into fills.  
 
 The `BacktestRunner` wires these pieces and produces a `BacktestResult`.
 

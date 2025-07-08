@@ -10,7 +10,6 @@ nav:
       - Data Sources: usage/data-sources.md
       - Backtesting Engine: usage/backtesting.md
       - Execution Simulator: usage/execution.md
-  - Roadmap: roadmap.md
   - API Reference:
       - Models: reference/quantex.models.md
       - Sources: reference/quantex.sources.md

@@ -5,11 +5,8 @@ This module exposes:
     * ``BacktestRunner`` – a convenience wrapper that wires together a Strategy,
       one or more DataSource objects, an execution simulator and the internal
       EventBus. End-users typically instantiate ``BacktestRunner`` once per
-      test and call :pycode{run()} to obtain a :class:`BacktestResult`.
+      test and call `run()` to obtain a `BacktestResult`.
 
-All public functions/classes use Google-style docstrings with explicit type
-annotations so that the documentation generator (mkdocstrings-python) can
-render accurate signatures.
 """
 
 from __future__ import annotations

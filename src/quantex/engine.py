@@ -1,8 +1,8 @@
 """Core event loop orchestrating data flow between sources, strategy and simulator.
 
-The :class:`EventBus` pre-computes a global timeline, vectorises price data into
+The `EventBus` pre-computes a global timeline, vectorises price data into
 NumPy arrays for speed, injects market snapshots into the running
-:class:`~quantex.strategy.Strategy` and records NAV, orders and fills.
+`quantex.strategy.Strategy` and records NAV, orders and fills.
 
 Google-style docstrings are used throughout for consistency.
 """
