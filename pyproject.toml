@@ -13,6 +13,7 @@ dependencies = [
     "pytest-xdist (>=3.8.0,<4.0.0)",
     "matplotlib (>=3.10.3,<4.0.0)",
     "mkdocs-to-pdf (>=0.10.1,<0.11.0)",
+    "mkdocs-material (>=9.6.15,<10.0.0)",
 ]
 
 [tool.poetry]
