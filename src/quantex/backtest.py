@@ -81,6 +81,9 @@ class BacktestRunner:
         if not nav_series.empty and nav_series.iloc[0] != 0:
             metrics["total_return"] = nav_series.iloc[-1] / nav_series.iloc[0] - 1
 
+            # Maximum drawdown ---------------------------------------------
+            metrics["max_drawdown"] = _max_drawdown(nav_series)
+
             # Sharpe ratio -------------------------------------------------
             if len(nav_series) > 1:
                 metrics["sharpe_ratio"] = _annualised_sharpe(
@@ -125,3 +128,26 @@ def _annualised_sharpe(
         return float("nan")
 
     return np.sqrt(periods_per_year) * excess.mean() / std
+
+
+def _max_drawdown(nav: pd.Series) -> float:
+    """Compute the maximum drawdown for a NAV series.
+
+    Args:
+        nav: Series of portfolio values indexed by timestamp.
+
+    Returns:
+        Maximum drawdown as a percentage (e.g., -0.15 for 15% drawdown).
+        Returns 0.0 if the series is empty or has only one value.
+    """
+    if nav.empty or len(nav) <= 1:
+        return 0.0
+
+    # Calculate running maximum (peak values)
+    running_max = nav.expanding().max()
+
+    # Calculate drawdown as percentage from peak
+    drawdown = (nav - running_max) / running_max
+
+    # Return the maximum (most negative) drawdown
+    return float(drawdown.min())
