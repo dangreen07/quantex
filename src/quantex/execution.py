@@ -24,6 +24,9 @@ order books) can inherit from or replace this class in future versions.
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Sequence
+import pandas as pd
+import math
 
 from quantex.models import Fill, Order, Portfolio
 
@@ -38,7 +41,12 @@ class ImmediateFillSimulator:
     default behaviour in future iterations.
     """
 
-    def __init__(self, portfolio: Portfolio, commission: float = 0.0) -> None:
+    def __init__(
+        self,
+        portfolio: Portfolio,
+        commission: float = 0.0,
+        min_holding_period: pd.Timedelta | None = None,
+    ) -> None:
         """Initializes the ImmediateFillSimulator.
 
         Args:
@@ -47,6 +55,7 @@ class ImmediateFillSimulator:
         """
         self.portfolio = portfolio
         self.commission = commission
+        self.min_holding_period = min_holding_period
 
     def execute(
         self, order: Order, execution_price: float, timestamp: datetime
@@ -61,6 +70,24 @@ class ImmediateFillSimulator:
         Returns:
             The created Fill object.
         """
+
+        # --- Optional minimum holding period enforcement --------------
+        if (
+            self.min_holding_period is not None
+            and order.symbol in self.portfolio.positions
+        ):
+            pos = self.portfolio.positions[order.symbol]
+            if pos.open_timestamp is not None:
+                holding_time = timestamp - pos.open_timestamp
+                # Closing or reducing existing exposure before min period?
+                if (
+                    (order.side == "sell" and pos.position > 0)
+                    or (order.side == "buy" and pos.position < 0)
+                ) and holding_time < self.min_holding_period:
+                    raise ValueError(
+                        "Order violates minimum holding period: "
+                        f"held for {holding_time}, required {self.min_holding_period}."
+                    )
 
         if order.side == "buy":
             required_cash = order.quantity * execution_price + self.commission
@@ -84,3 +111,125 @@ class ImmediateFillSimulator:
         # Immediately reflect the fill in the portfolio.
         self.portfolio.process_fill(fill)
         return fill
+
+
+class NextBarSimulator(ImmediateFillSimulator):
+    """Execution simulator that fills market orders at the *next* bar.
+
+    Orders received during bar *t* are **queued** and executed at the **beginning
+    of bar *t+1*** using that bar's **open** price.
+
+    The EventBus calls :pycode{flush_pending()} before it injects the current
+    bar's market snapshot into the strategy. This ensures that fills appear in
+    the portfolio *before* the strategy logic for the new bar runs – matching
+    the behaviour of many off-the-shelf backtesting libraries where orders are
+    assumed to execute on the next bar's open.
+    """
+
+    def __init__(
+        self,
+        portfolio: Portfolio,
+        commission: float = 0.0,
+        min_holding_period: pd.Timedelta | None = None,
+        *,
+        fill_at: str = "open",
+    ) -> None:
+        if fill_at not in {"open", "close"}:
+            raise ValueError("fill_at must be 'open' or 'close'")
+
+        super().__init__(portfolio, commission, min_holding_period)
+        self._pending_orders: list[Order] = []
+        self._fill_at = fill_at
+
+    # ------------------------------------------------------------------
+    # Public API – called by EventBus for *new* orders in bar t
+    # ------------------------------------------------------------------
+    def execute(
+        self, order: Order, execution_price: float, timestamp: datetime
+    ) -> None:  # type: ignore[override]
+        """Queues *order* for execution on the following bar.
+
+        Unlike :class:`ImmediateFillSimulator`, this method **does not** return
+        a :class:`quantex.models.Fill` immediately. The fill will be generated
+        by :meth:`flush_pending` when the next timestamp is processed.
+        """
+
+        # Store the original *Order* object – we intentionally ignore the
+        # *execution_price* passed in for the current bar because the trade
+        # should fill at the next bar's price.
+        self._pending_orders.append(order)
+        # Returning *None* signals the EventBus that nothing was filled yet.
+        return None  # type: ignore[return-value]
+
+    # ------------------------------------------------------------------
+    # Internal API – invoked by EventBus at the start of bar t+1
+    # ------------------------------------------------------------------
+    def flush_pending(
+        self,
+        timestamp: datetime,
+        price_row: Sequence[float],
+        symbol_idx: dict[str, int],
+    ) -> list[Fill]:
+        """Converts *all* queued orders into fills at *timestamp*.
+
+        Args:
+            timestamp: The timestamp that will be assigned to each fill
+                (i.e. the *current* bar processed by the EventBus).
+            price_row: Numpy-converted prices for the current bar **aligned**
+                to ``symbol_idx`` – obtained directly from the EventBus.
+            symbol_idx: Mapping symbol→column index allowing O(1) look-ups.
+
+        Returns:
+            List of created :class:`quantex.models.Fill` objects.
+        """
+
+        fills: list[Fill] = []
+
+        # We iterate over a *copy* of the list so we can clear it safely even
+        # if an exception is raised inside ``super().execute``.
+        pending, self._pending_orders = self._pending_orders, []
+
+        for order in pending:
+            # Prefer the *open* price for the current bar. We fetch it from
+            # the underlying DataSource via the EventBus reference.
+            event_bus = getattr(
+                self, "event_bus", None
+            )  # could be absent in unit tests
+            ds = None
+            if event_bus is not None:
+                ds = event_bus.data_sources.get(order.symbol)
+
+            if ds is not None:
+                raw = ds.get_raw_data()
+                if timestamp not in raw.index:
+                    # In case of missing timestamp fallback to close via price_row
+                    ds = None
+                else:
+                    if self._fill_at == "open":
+                        if "open" in raw.columns:
+                            execution_price = float(raw.loc[timestamp, "open"])
+                        else:
+                            execution_price = float(raw.loc[timestamp, "close"])
+                    else:  # fill_at == "close"
+                        execution_price = float(raw.loc[timestamp, "close"])
+            else:
+                # Fallback to price_row close price when symbol missing or ds None
+                idx = symbol_idx.get(order.symbol)
+                if idx is None:
+                    continue
+                execution_price = float(price_row[idx])
+
+            # If price moved unfavourably we may not have enough cash for the
+            # original quantity (sized with yesterday's close). Adjust down.
+            if order.side == "buy":
+                max_affordable = math.floor(self.portfolio.cash / execution_price)
+                if max_affordable == 0:
+                    # Skip order entirely – cannot afford even 1 share
+                    continue
+                if max_affordable < order.quantity:
+                    order.quantity = max_affordable  # type: ignore[assignment]
+
+            fill = super().execute(order, execution_price, timestamp)
+            fills.append(fill)
+
+        return fills

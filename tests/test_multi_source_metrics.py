@@ -124,5 +124,7 @@ def test_multi_source_positive_return():
 
     assert result.metrics["total_return"] > 0
 
-    expected = (109 - 100) / 100_000
+    # Orders are executed on the **next** bar's open, so the buy happens at
+    # 101 (not 100). Profit = 109 − 101.
+    expected = (109 - 101) / 100_000
     assert pytest.approx(result.metrics["total_return"], abs=1e-6) == expected

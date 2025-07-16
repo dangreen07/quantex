@@ -99,6 +99,4 @@ Name: NAV, dtype: float64
 * Dive into the [**API Reference**](reference/quantex.models.md) for full docstrings.
 * Contribute ideas or improvements on GitHub.
 
-Happy trading 🐍💹
-
 --- 

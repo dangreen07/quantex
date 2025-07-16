@@ -100,12 +100,26 @@ class CSVDataSource(BacktestingDataSource):
         if not self.path.exists():
             raise FileNotFoundError(self.path)
 
-        df = pd.read_csv(self.path, parse_dates=["timestamp"])
-        df = df.set_index("timestamp")
-        df = df.sort_index()
+        # Load the data first without any special parsing so we can normalise
+        # column names irrespective of their original case.
+        df = pd.read_csv(self.path)
+
+        # Make all column names lower-case so that subsequent access is
+        # case-insensitive.
+        df.columns = [c.lower() for c in df.columns]
+
+        # Ensure a timestamp column exists (case-insensitive due to rename).
+        if "timestamp" not in df.columns:
+            raise ValueError("CSV missing required 'timestamp' column")
+
+        # Parse the timestamps and set as index.
+        df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+        df = df.set_index("timestamp").sort_index()
+
+        # Validate required OHLCV columns (now lower-case).
         required_cols = {"open", "high", "low", "close", "volume"}
-        if not required_cols.issubset(df.columns):
-            missing = required_cols.difference(df.columns)
+        missing = required_cols.difference(df.columns)
+        if missing:
             raise ValueError(f"CSV missing required columns: {missing}")
 
         self._df = df  # immutable reference
@@ -126,7 +140,12 @@ class CSVDataSource(BacktestingDataSource):
             The next timestamp, or None if the source is exhausted.
         """
         if self.index < len(self):
-            return self._df.index[self.index]
+            ts = self._df.index[self.index]
+            # CSVDataSource keeps timestamps timezone-aware (UTC) internally
+            # for consistency, but many user-facing contexts (including the
+            # bundled test-suite) expect **naive** timestamps. We therefore
+            # return the timestamp *without* its timezone information here.
+            return ts.tz_localize(None) if ts.tzinfo is not None else ts
         return None
 
     def get_current_bar(self) -> Bar:
@@ -182,7 +201,10 @@ class ParquetDataSource(BacktestingDataSource):
         # Load data – let pandas/FastParquet handle decompression & column types
         df = pd.read_parquet(self.path)
 
-        # If timestamp is a regular column, make it the index
+        # Normalise column names to lower-case for case-insensitive access.
+        df.columns = [c.lower() for c in df.columns]
+
+        # If a timestamp column exists (case-insensitive due to rename), make it the index.
         if "timestamp" in df.columns:
             df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
             df = df.set_index("timestamp")
@@ -191,8 +213,8 @@ class ParquetDataSource(BacktestingDataSource):
         df = df.sort_index()
 
         required_cols = {"open", "high", "low", "close", "volume"}
-        if not required_cols.issubset(df.columns):
-            missing = required_cols.difference(df.columns)
+        missing = required_cols.difference(df.columns)
+        if missing:
             raise ValueError(f"Parquet missing required columns: {missing}")
 
         # Immutable reference to underlying data

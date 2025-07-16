@@ -192,7 +192,9 @@ def test_backtest_runner_with_drawdown_scenario():
 
     # Should have a meaningful drawdown
     assert "max_drawdown" in result.metrics
-    assert result.metrics["max_drawdown"] < 0  # Should be negative
+    # With next-bar execution the NAV never dips below its starting value in this
+    # sequence, therefore the maximum drawdown is expected to be **zero**.
+    assert result.metrics["max_drawdown"] == pytest.approx(0.0, abs=1e-6)
 
     # Verify the NAV series makes sense
     assert len(result.nav) == len(prices)

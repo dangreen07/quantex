@@ -156,6 +156,8 @@ class Position:
         self.trades: list["Trade"] = []
         self.average_price: float = 0.0
         self.realized_pnl: float = 0.0
+        # Timestamp when the current exposure was opened. None if flat.
+        self.open_timestamp: datetime | None = None
 
     @property
     def is_long(self) -> bool:
@@ -197,7 +199,20 @@ class Position:
                 """Direction flip: cost basis reset."""
                 self.average_price = price
 
+        # Update position quantity
         self.position = new_pos
+
+        # --- Maintain open_timestamp ----------------------------------
+        if prev_pos == 0 and new_pos != 0:
+            # Transition from flat to open – record entry time
+            self.open_timestamp = timestamp
+        elif new_pos == 0:
+            # Flat again → reset
+            self.open_timestamp = None
+        elif prev_pos * new_pos < 0:
+            # Direction flip (crossed through zero) → new exposure starts now
+            self.open_timestamp = timestamp
+
         self.trades.append(Trade(self.symbol, price, quantity, timestamp))
 
     def buy(self, quantity: float, price: float, timestamp: datetime):

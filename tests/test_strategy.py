@@ -148,3 +148,21 @@ class TestStrategyHelpers:
         # Should now return the DataFrame
         returned = strat._get_price_history_df()  # type: ignore[attr-defined]
         assert returned.equals(df)
+
+    def test_buy_with_cash_and_default(self, strategy: DummyStrategy):
+        """Buy helper sizes position correctly when quantity omitted."""
+        strategy.timestamp = datetime(2024, 1, 1)
+        # Inject fake price so helper can compute quantity
+        strategy._update_market_data([50.0], ["TEST"], {"TEST": 0})  # type: ignore[attr-defined]
+
+        # Case 1: No args -> invest all cash
+        strategy.portfolio.cash = 1_000
+        strategy.buy("TEST")
+        order = strategy._pop_pending_orders()[0]
+        assert order.quantity == 20  # floor(1000 / 50)
+
+        # Case 2: cash-limited sizing
+        strategy.portfolio.cash = 1_000
+        strategy.buy("TEST", cash=250)
+        order2 = strategy._pop_pending_orders()[0]
+        assert order2.quantity == 5  # floor(250/50)

@@ -48,6 +48,8 @@ $ cd quantex
 
 # Install dependencies
 $ poetry install
+$ poetry build
+$ pip install dist/quantex-0.1.0-py3-none-any.whl
 ```
 
 This command will:

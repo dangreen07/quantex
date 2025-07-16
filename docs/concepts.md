@@ -44,15 +44,15 @@ The `EventBus` keeps time in sync across all data sources:
 
 1. Snapshot current bars & create a price dictionary *(common timeline, see note below)*
 2. Call `strategy.run()` (strategy may queue orders)
-3. Forward queued orders to an `ImmediateFillSimulator`
+3. Forward queued orders to a `NextBarSimulator` (default)
 4. Update NAV, record the timestamp
 5. Increment indices
 
 > **Timeline semantics** – QuantEx now uses the **intersection** of all data-source indices as its global timeline. This means a bar is processed **only if every source provides a record for that exact timestamp**. Missing observations are *not* forward-filled across symbols; instead the bar is skipped entirely. This guarantees that strategy helpers (e.g. `get_price`, `price_history`) never encounter `NaN` values.
 
-`ImmediateFillSimulator` converts `Order`s into `Fill`s at the bar's *close* price and updates the portfolio.
+`NextBarSimulator` queues orders raised during bar *t* and converts them into `Fill`s at the *open* of bar *t+1*, then updates the portfolio. For immediate, zero-latency fills you can opt into `ImmediateFillSimulator` instead.
 
-The `EventBus` is currently coupled to `ImmediateFillSimulator`. Swapping in more realistic execution models will require creating a common simulator interface in future versions.
+By default the `EventBus` uses `NextBarSimulator`. You can swap in alternative execution models (e.g. `ImmediateFillSimulator`) by passing a custom `simulator` instance to `BacktestRunner`.
 
 ## BacktestRunner
 

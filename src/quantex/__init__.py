@@ -14,4 +14,5 @@ from .models import (
 )
 from .engine import EventBus as EventBus
 from .execution import ImmediateFillSimulator as ImmediateFillSimulator
+from .execution import NextBarSimulator as NextBarSimulator
 from .backtest import BacktestRunner as BacktestRunner, BacktestResult as BacktestResult

@@ -44,6 +44,10 @@ class EventBus:
         self.data_sources = data_sources
         self.simulator = simulator
 
+        # Expose EventBus to the simulator (used by NextBarSimulator to fetch
+        # open prices).
+        setattr(self.simulator, "event_bus", self)
+
         setattr(self.strategy, "event_bus", self)
 
         self.orders: list[Order] = []
@@ -122,6 +126,14 @@ class EventBus:
 
             price_row = self._price_array[row_idx]
 
+            # Flush any orders queued for execution at *this* timestamp.
+            if hasattr(self.simulator, "flush_pending"):
+                # ``flush_pending`` returns a list of Fill objects (may be empty).
+                new_fills = getattr(self.simulator, "flush_pending")(  # type: ignore[attr-defined]
+                    ts, price_row, self._symbol_idx
+                )
+                self.fills.extend(new_fills)
+
             # Inject current market snapshot into strategy (very low overhead)
             self.strategy._update_market_data(
                 price_row, self._symbols, self._symbol_idx
@@ -145,7 +157,8 @@ class EventBus:
                     continue
                 execution_price = float(price_row[idx])
                 fill = self.simulator.execute(order, execution_price, ts)
-                self.fills.append(fill)
+                if fill is not None:
+                    self.fills.append(fill)
 
             # Record NAV (vectorised prices dict → float conversion once)
             nav = self.strategy.portfolio.net_asset_value_array(

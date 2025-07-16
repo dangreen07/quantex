@@ -29,8 +29,8 @@ class SMACross(Strategy):
 
 | Method | Purpose |
 |--------|---------|
-| `buy(symbol, qty, limit_price=None)` | Places a buy order. |
-| `sell(symbol, qty, limit_price=None)` | Places a sell order. |
+| `buy(symbol, quantity=None, *, cash=None, limit_price=None)` | Flexible buy helper – size by *quantity*, *cash* or invest **all available cash** when both are omitted. |
+| `sell(symbol, quantity=None, *, cash=None, limit_price=None)` | Flexible sell helper – size by *quantity*, target *cash* proceeds, or close the entire long position when arguments are omitted. |
 | `close_position(symbol)` | Market-closes any open position. |
 | `get_price(symbol)` | O(1) latest price lookup via NumPy. |
 | `cash` | Current available cash (read-only shortcut for `portfolio.cash`). |
@@ -116,7 +116,7 @@ No more accidental negative balances!
 
 * **Multi-Asset Trading** – Because the engine feeds *aligned* price rows, slicing `hist[["BTC", "ETH"]]` gives you a *synchronised* DataFrame ready for vectorised NumPy/Pandas operations.
 * **Lagging Indicators** – Compute them on `self.price_history` inside `run()`; no look-ahead bias because the latest row corresponds to the current bar.
-* **Position Sizing** – Use `self.cash` (or `self.portfolio.cash`) to implement Kelly-style sizing.
+* **Position Sizing** – Call `self.buy("AAPL", cash=5_000)` to invest a fixed amount, or simply `self.buy("AAPL")` to deploy all available cash. You can still access `self.cash` (or `self.portfolio.cash`) for custom formulas (e.g. Kelly sizing).
 * **Debugging** – Insert `print(self.timestamp, self.portfolio)` to log cash & positions every bar.
 
 ---

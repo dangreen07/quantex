@@ -104,18 +104,61 @@ class Strategy(ABC):
         raise NotImplementedError("Subclasses must implement this method.")
 
     def buy(
-        self, symbol: str, quantity: float, limit_price: float | None = None
+        self,
+        symbol: str,
+        quantity: float | None = None,
+        *,
+        cash: float | None = None,
+        limit_price: float | None = None,
     ) -> None:
-        """Creates and submits a buy order using the current strategy timestamp.
+        """Creates and submits a buy order.
+
+        The method is flexible:
+
+        1. **Quantity-based** (classic):
+            ```python
+            self.buy("AAPL", quantity=10)
+            ```
+
+        2. **Cash-based** – buy as many shares as *cash* allows:
+            ```python
+            self.buy("AAPL", cash=5_000)
+            ```
+
+        3. **Max-size** – omit both *quantity* and *cash* to invest all
+           available cash:
+            ```python
+            self.buy("AAPL")
+            ```
 
         Args:
-            symbol: The symbol to buy.
-            quantity: The quantity to buy. Must be positive.
-            limit_price: If provided, a limit order is created. Otherwise, a
-                market order is created.
+            symbol: The instrument to purchase.
+            quantity: Number of shares to buy. If ``None`` the method will
+                derive it from *cash* or the account's entire cash balance.
+            cash: Dollar amount to deploy. Ignored when *quantity* is
+                provided. Mutually exclusive with *quantity*.
+            limit_price: Optional limit order price. If omitted, a market
+                order is created.
         """
+
         if self.timestamp is None:
             raise RuntimeError("Cannot place order: strategy timestamp is not set.")
+
+        if quantity is None:
+            # Determine execution price reference for sizing.
+            price_ref = (
+                limit_price if limit_price is not None else self.get_price(symbol)
+            )
+
+            deployable_cash = self.cash if cash is None else min(cash, self.cash)
+            if deployable_cash <= 0:
+                raise ValueError("Insufficient cash to size order.")
+
+            # Allow fractional sizing (e.g. for crypto) – use exact ratio
+            quantity = deployable_cash / price_ref
+
+        if quantity <= 0:
+            raise ValueError("Quantity must be > 0 after sizing.")
 
         order = Order(
             id=f"buy-{symbol}-{self.timestamp}",
@@ -129,7 +172,12 @@ class Strategy(ABC):
         self.submit_order(order)
 
     def sell(
-        self, symbol: str, quantity: float, limit_price: float | None = None
+        self,
+        symbol: str,
+        quantity: float | None = None,
+        *,
+        cash: float | None = None,
+        limit_price: float | None = None,
     ) -> None:
         """Creates and submits a sell order using the current strategy timestamp.
 
@@ -142,11 +190,37 @@ class Strategy(ABC):
         if self.timestamp is None:
             raise RuntimeError("Cannot place order: strategy timestamp is not set.")
 
+        # ------------------------------------------------------------------
+        # Flexible sizing logic (mirrors buy())
+        # ------------------------------------------------------------------
+
+        if quantity is None:
+            # Reference price for sizing – fall back to current market price
+            price_ref = (
+                limit_price if limit_price is not None else self.get_price(symbol)
+            )
+
+            if cash is not None:
+                # Size based on desired cash proceeds
+                quantity = cash / price_ref
+            else:
+                # Neither quantity nor cash provided – default to closing the
+                # existing long position (if any)
+                position = self.positions.get(symbol)
+                if position is None or position.is_closed or position.position <= 0:
+                    raise ValueError(
+                        "Unable to infer sell quantity – provide quantity or cash, or ensure a long position is open."
+                    )
+                quantity = position.position  # sell entire long exposure
+
+        if quantity <= 0:
+            raise ValueError("Quantity must be > 0 after sizing.")
+
         order = Order(
             id=f"sell-{symbol}-{self.timestamp}",
             symbol=symbol,
             side="sell",
-            quantity=quantity,
+            quantity=quantity,  # type: ignore[arg-type]
             order_type="limit" if limit_price else "market",
             limit_price=limit_price,
             timestamp=self.timestamp,
