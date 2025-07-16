@@ -1417,27 +1417,6 @@ files = [
 ]
 
 [[package]]
-name = "metatrader5"
-version = "5.0.5120"
-description = "API Connector to MetaTrader 5 Terminal"
-optional = false
-python-versions = "<4,>3.5"
-groups = ["main"]
-files = [
-    {file = "MetaTrader5-5.0.5120-cp310-cp310-win_amd64.whl", hash = "sha256:0a6ee07fb628b6cee2100396181f99e220921ae5770dabfbf8f88e510b0e1693"},
-    {file = "MetaTrader5-5.0.5120-cp311-cp311-win_amd64.whl", hash = "sha256:19216026ae15b22a6d9ae6e7e7243ac5a7d62133e80c9e891df2d2deff3c341d"},
-    {file = "MetaTrader5-5.0.5120-cp312-cp312-win_amd64.whl", hash = "sha256:cafe16b062c9124560e14d19af0c4454c5115447cd26f10f6180c3a9c85fd55b"},
-    {file = "MetaTrader5-5.0.5120-cp313-cp313-win_amd64.whl", hash = "sha256:5f6596a68118911f8250db65d0e57976e109eac434cd2b25de831c4ddc103d3e"},
-    {file = "MetaTrader5-5.0.5120-cp36-cp36m-win_amd64.whl", hash = "sha256:54cda60738c594b807c801418d41c5154129ee01622496397adc26d36e78d16e"},
-    {file = "MetaTrader5-5.0.5120-cp37-cp37m-win_amd64.whl", hash = "sha256:e0e267d068f47c9b8b393bcfb85ac1e0987bb7ea75648993e63f5119c9eecbd8"},
-    {file = "MetaTrader5-5.0.5120-cp38-cp38-win_amd64.whl", hash = "sha256:cd60296a4c1506e3659c6b57146e30f066e1472610ff86f9dbaf8c1b1d6f4964"},
-    {file = "MetaTrader5-5.0.5120-cp39-cp39-win_amd64.whl", hash = "sha256:730c9e06a1af1142cc5cd31c5a70db974457354f568ee292b2eb84890b0501de"},
-]
-
-[package.dependencies]
-numpy = ">=1.7"
-
-[[package]]
 name = "mkdocs"
 version = "1.6.1"
 description = "Project documentation with Markdown."
@@ -2254,18 +2233,6 @@ files = [
 six = ">=1.5"
 
 [[package]]
-name = "pythonmetatrader5"
-version = "1.0.9"
-description = "Connect MT5 with Python"
-optional = false
-python-versions = ">=3.6"
-groups = ["main"]
-files = [
-    {file = "PythonMetaTrader5-1.0.9-py3-none-any.whl", hash = "sha256:98ad1049b8d7de92054958421a34438bfd79a983c43a90d0538c279a9ef6a69d"},
-    {file = "PythonMetaTrader5-1.0.9.tar.gz", hash = "sha256:8d7ab28c03f77654ffc7784eca6bdbf9f8408675853ac9aec1173e7c8b43e0c4"},
-]
-
-[[package]]
 name = "pytz"
 version = "2025.2"
 description = "World timezone definitions, modern and historical"
@@ -2679,4 +2646,4 @@ test = ["pytest"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.13,<4"
-content-hash = "9368fe5437e93aa3fb353ee639253dddd33fba1b447f0809ef6d1e18e24ab595"
+content-hash = "7894057fa0d23290e854b986dcd21029135091fc09925502466c42ddd2a21446"
