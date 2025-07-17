@@ -38,39 +38,11 @@ all without the heavy overhead of larger, more opinionated quant libraries.
 ---
 
 ## Installation
-Quantex is managed with [Poetry](https://python-poetry.org/). Clone the
-repository and install the dependencies in an isolated virtual environment:
+Installation can be done with a single command:
 
 ```bash
-# Clone the repo
-$ git clone https://github.com/dangreen07/quantex.git
-$ cd quantex
-
-# Install dependencies
-$ poetry install
-$ poetry build
-$ pip install dist/quantex-0.1.0-py3-none-any.whl
+pip install quantex
 ```
-
-This command will:
-1. Create / activate a local virtual-env (unless Poetry is configured to use a
-   global env).
-2. Install package dependencies from `pyproject.toml`.
-3. Install Quantex itself in *editable* mode, so changes you make in `src/` are
-   reflected immediately.
-
----
-
-## Running Tests
-Quantex uses [pytest](https://docs.pytest.org/) for its test suite. After
-installing the dev dependencies (`poetry install` above), simply run:
-
-```bash
-poetry run pytest
-```
-
-You should see tests collect and run successfully. Ensure your editor uses the
-Poetry virtual-env so import paths resolve correctly.
 
 ---
 

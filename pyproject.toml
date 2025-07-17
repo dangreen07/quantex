@@ -7,6 +7,7 @@ authors = [
 ]
 readme = "README.md"
 requires-python = ">=3.13,<4"
+license = "MIT"
 dependencies = [
     "pandas (>=2.3.0,<3.0.0)",
     "fastparquet (>=2024.11.0,<2025.0.0)",
