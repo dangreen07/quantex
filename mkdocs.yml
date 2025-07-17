@@ -2,6 +2,23 @@ site_name: QuantEx
 site_description: Documentation for QuantEx
 theme:
   name: material
+  palette:
+    # Scheme can be 'default' (light) or 'slate' (dark)
+    # You can also define specific light/dark palettes
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: teal # Example: Change the primary color (header, links)
+      accent: deep orange # Example: Change the accent color (highlight)
+      toggle:
+        icon: material/brightness-4 # Icon for light mode
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate # Or 'default' for a dark scheme
+      primary: blue grey
+      accent: amber
+      toggle:
+        icon: material/brightness-7 # Icon for dark mode
+        name: Switch to light mode
 nav:
   - Home: index.md
   - Guides:
@@ -9,6 +26,7 @@ nav:
       - Data Sources: usage/data-sources.md
       - Backtesting Engine: usage/backtesting.md
       - Execution Simulator: usage/execution.md
+      - Technical Indicators: usage/indicators.md
   - API Reference:
       - Models: reference/quantex.models.md
       - Sources: reference/quantex.sources.md
@@ -26,5 +44,4 @@ plugins:
             - ./src
           options:
             docstring_style: google
-  - to-pdf:
-      enabled_if_env: ENABLE_PDF_EXPORT
+  - mermaid2

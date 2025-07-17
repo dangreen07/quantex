@@ -61,6 +61,9 @@ class Strategy(ABC):
         self._pending_orders: list[Order] = []
         self.signals = pd.DataFrame()
 
+        # Cache for computed indicator Series keyed by (func_name, symbol, param_tuple)
+        self._indicator_cache: dict[tuple, pd.Series] = {}
+
         # --- Internals set by the engine each bar ---
         self._price_row: list[float] | None = None
         self._symbols: list[str] | None = None
@@ -363,6 +366,59 @@ class Strategy(ABC):
         if len(history) < lookback_period:
             return history.copy()
         return history.iloc[-lookback_period:].copy()
+
+    def indicator(self, func_name: str, symbol: str, /, **params):
+        """Convenience wrapper to fetch the *latest* value of an indicator.
+
+        Example:
+            ```python
+            sma_20 = self.indicator("sma", symbol="AAPL", period=20)
+            if sma_20 > self.get_price("AAPL"):
+                ...
+            ```
+
+        Internally, the method memoises the full Series for the indicator
+        so subsequent calls within the same strategy instance are O(1).
+
+        Args:
+            func_name: Name of the indicator function exposed in
+                :pymod:`quantex.indicators` (e.g. ``"sma"``, ``"rsi"``).
+            symbol: Price series symbol to operate on.
+            **params: Keyword arguments forwarded to the indicator function
+                (e.g. ``period=20``).
+
+        Returns:
+            float: Latest indicator value corresponding to the *current* bar.
+        """
+        from importlib import import_module
+
+        if self.index < 0:
+            raise RuntimeError(
+                "Strategy not initialised – indicator() called before first bar."
+            )
+
+        # Lazily build key for the cache – order params to make hash stable.
+        params_key = tuple(sorted(params.items()))
+        cache_key = (func_name, symbol, params_key)
+
+        # Compute if not cached yet or shorter than current bar index.
+        series = self._indicator_cache.get(cache_key)
+        if series is None or len(series) <= self.index:
+            # Import indicator function dynamically.
+            ind_mod = import_module("quantex.indicators")
+            try:
+                func = getattr(ind_mod, func_name)
+            except AttributeError as exc:
+                raise ValueError(
+                    f"Indicator '{func_name}' not found in quantex.indicators"
+                ) from exc
+
+            price_series = self.price_history[symbol]
+            full_series = func(price_series, **params)
+            self._indicator_cache[cache_key] = full_series
+            series = full_series
+
+        return float(series.iloc[self.index])
 
     # Called by EventBus – should be considered *private*
     def _update_market_data(self, price_row, symbols, symbol_idx):
