@@ -7,13 +7,10 @@ all without the heavy overhead of larger, more opinionated quant libraries.
 
 ---
 
-## Table of Contents
-1. [Features](#features)
-2. [Project Layout](#project-layout)
-3. [Installation](#installation)
-4. [Running Tests](#running-tests)
-5. [Development](#development)
-6. [Contributing](#contributing)
+## Documentation & Source Code
+To see the documentation go [here](https://dangreen07.github.io/quantex/).
+
+The source code for this library can be found [here](https://github.com/dangreen07/quantex)
 
 ---
 
