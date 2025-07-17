@@ -5,3 +5,4 @@ site/
 .coverage
 htmlcov
 dist/
+random_walk_profile.prof

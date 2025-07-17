@@ -24,11 +24,16 @@ order books) can inherit from or replace this class in future versions.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Sequence
+from typing import Sequence, TYPE_CHECKING
 import pandas as pd
 import math
 
+if TYPE_CHECKING:  # pragma: no cover
+    # Deferred import for type checking to avoid circular dependency at runtime
+    from quantex.engine import EventBus
+
 from quantex.models import Fill, Order, Portfolio
+from quantex.sources import BacktestingDataSource
 
 
 class ImmediateFillSimulator:
@@ -140,6 +145,7 @@ class NextBarSimulator(ImmediateFillSimulator):
         super().__init__(portfolio, commission, min_holding_period)
         self._pending_orders: list[Order] = []
         self._fill_at = fill_at
+        self.event_bus: EventBus | None = None
 
     # ------------------------------------------------------------------
     # Public API – called by EventBus for *new* orders in bar t
@@ -192,10 +198,8 @@ class NextBarSimulator(ImmediateFillSimulator):
         for order in pending:
             # Prefer the *open* price for the current bar. We fetch it from
             # the underlying DataSource via the EventBus reference.
-            event_bus = getattr(
-                self, "event_bus", None
-            )  # could be absent in unit tests
-            ds = None
+            event_bus: EventBus | None = self.event_bus
+            ds: BacktestingDataSource | None = None
             if event_bus is not None:
                 ds = event_bus.data_sources.get(order.symbol)
 
@@ -207,11 +211,11 @@ class NextBarSimulator(ImmediateFillSimulator):
                 else:
                     if self._fill_at == "open":
                         if "open" in raw.columns:
-                            execution_price = float(raw.loc[timestamp, "open"])
+                            execution_price = float(raw.at[timestamp, "open"])
                         else:
-                            execution_price = float(raw.loc[timestamp, "close"])
+                            execution_price = float(raw.at[timestamp, "close"])
                     else:  # fill_at == "close"
-                        execution_price = float(raw.loc[timestamp, "close"])
+                        execution_price = float(raw.at[timestamp, "close"])
             else:
                 # Fallback to price_row close price when symbol missing or ds None
                 idx = symbol_idx.get(order.symbol)

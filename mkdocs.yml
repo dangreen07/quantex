@@ -45,3 +45,4 @@ plugins:
           options:
             docstring_style: google
   - mermaid2
+  - print-site

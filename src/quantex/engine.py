@@ -13,10 +13,11 @@ from datetime import datetime
 from typing import Mapping
 import pandas as pd
 
-from quantex.execution import ImmediateFillSimulator
+from quantex.execution import ImmediateFillSimulator, NextBarSimulator
 from quantex.models import Fill, Order
 from quantex.sources import BacktestingDataSource
 from quantex.strategy import Strategy
+from tqdm import tqdm
 
 
 class EventBus:
@@ -31,7 +32,7 @@ class EventBus:
         self,
         strategy: Strategy,
         data_sources: Mapping[str, BacktestingDataSource],
-        simulator: ImmediateFillSimulator,
+        simulator: ImmediateFillSimulator | NextBarSimulator,
     ) -> None:
         """Initializes the EventBus.
 
@@ -102,8 +103,8 @@ class EventBus:
         self._price_df = price_df
 
         if not self._price_df.empty:
-            self._price_array = self._price_df.to_numpy(dtype=float)
             self._symbols = list(self._price_df.columns)
+            self._price_array = self._price_df.to_numpy(dtype="float64", copy=False)
             self._symbol_idx = {sym: i for i, sym in enumerate(self._symbols)}
 
     def run(self) -> None:
@@ -121,18 +122,19 @@ class EventBus:
         if self._price_df is None:
             return  # No data to process
 
-        for row_idx, ts in enumerate(self._timeline):
+        for row_idx, ts in tqdm(enumerate(self._timeline), total=len(self._timeline)):
             self.strategy.timestamp = ts
 
             price_row = self._price_array[row_idx]
 
             # Flush any orders queued for execution at *this* timestamp.
-            if hasattr(self.simulator, "flush_pending"):
-                # ``flush_pending`` returns a list of Fill objects (may be empty).
-                new_fills = getattr(self.simulator, "flush_pending")(  # type: ignore[attr-defined]
+            if isinstance(self.simulator, NextBarSimulator):
+                new_fills = self.simulator.flush_pending(
                     ts, price_row, self._symbol_idx
                 )
-                self.fills.extend(new_fills)
+            else:
+                new_fills = []
+            self.fills.extend(new_fills)
 
             # Inject current market snapshot into strategy (very low overhead)
             self.strategy._update_market_data(

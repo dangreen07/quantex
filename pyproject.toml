@@ -1,6 +1,6 @@
 [project]
 name = "quantex"
-version = "0.1.0"
+version = "0.1.1"
 description = "A simple quant strategy creation and backtesting package."
 authors = [
     {name = "Daniel Green",email = "dangreen07@outlook.com"}
@@ -16,6 +16,9 @@ dependencies = [
     "mkdocs-to-pdf (>=0.10.1,<0.11.0)",
     "mkdocs-material (>=9.6.15,<10.0.0)",
     "mkdocs-mermaid2-plugin (>=1.2.1,<2.0.0)",
+    "mkdocs-print-site-plugin (>=2.7.3,<3.0.0)",
+    "pyarrow (>=20.0.0,<21.0.0)",
+    "tqdm (>=4.67.1,<5.0.0)",
 ]
 
 [tool.poetry]
