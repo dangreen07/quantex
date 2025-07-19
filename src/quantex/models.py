@@ -8,7 +8,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Dict
+from typing import Dict, Optional
+
+import numpy as np
 
 
 @dataclass(frozen=True)
@@ -255,7 +257,7 @@ class Position:
 
 
 class Portfolio:
-    """Aggregates cash and multiple Position objects."""
+    """Aggregates cash and Positions with fast NAV via NumPy dot."""
 
     def __init__(self, cash: float = 0.0):
         """Initializes the Portfolio.
@@ -265,80 +267,64 @@ class Portfolio:
         """
         self.starting_cash = cash
         self.cash = cash
+        # legacy dict for backward compatibility
         self.positions: Dict[str, Position] = {}
         self.realized_pnl = 0.0
+        # fast‐mode state
+        self._symbol_idx: Optional[Dict[str, int]] = None
+        self._pos_array: Optional[np.ndarray] = None
+
+    def set_symbol_index(self, symbol_idx: Dict[str, int]) -> None:
+        """Initialises the NumPy positions array from symbol_idx."""
+        self._symbol_idx = symbol_idx
+        n = len(symbol_idx)
+        self._pos_array = np.zeros(n, dtype=np.float64)
+        # seed from existing dict positions if any
+        for sym, pos in self.positions.items():
+            idx = symbol_idx[sym]
+            self._pos_array[idx] = pos.position
 
     def process_fill(self, fill: Fill):
-        """Updates the portfolio based on a fill.
-
-        This method updates cash and the relevant position.
-
-        Args:
-            fill: The Fill object to process.
-        """
+        """Updates cash, dict‐positions and NumPy position array."""
+        # cash impact
         self.cash -= fill.quantity * fill.price + fill.commission
-
+        # dict‐based update
         pos = self.positions.get(fill.symbol)
         if pos is None:
             pos = Position(fill.symbol)
             self.positions[fill.symbol] = pos
-
         prev_realized = pos.realized_pnl
         pos._apply_trade(fill.quantity, fill.price, fill.timestamp)
         self.realized_pnl += pos.realized_pnl - prev_realized
+        # vector‐based update
+        if self._symbol_idx is not None and self._pos_array is not None:
+            idx = self._symbol_idx[fill.symbol]
+            self._pos_array[idx] += fill.quantity
 
     def net_asset_value(self, price_dict: Dict[str, float]) -> float:
-        """Calculates the total value of the portfolio.
-
-        Args:
-            price_dict: A dictionary mapping symbols to their current prices.
-
-        Returns:
-            The Net Asset Value (NAV) of the portfolio.
-        """
+        """Legacy NAV: iterates the dict of Positions."""
         nav = self.cash
         for sym, pos in self.positions.items():
             current_price = price_dict[sym]
-            unrealized = (current_price - pos.average_price) * pos.position
-            nav += unrealized + pos.average_price * pos.position
+            nav += current_price * pos.position
         return nav
 
-    def net_asset_value_array(self, price_array, symbol_idx: Dict[str, int]) -> float:
-        """Compute NAV using a NumPy row for maximum performance.
-
-        Args:
-            price_array (numpy.ndarray): 1-D array *aligned with* ``symbol_idx``
-                representing the latest prices for the entire universe.
-            symbol_idx (dict[str, int]): Mapping from symbol to its position in
-                ``price_array``.
-
-        Returns:
-            float: Total net-asset-value (cash + market value of positions).
-        """
-        nav = self.cash
-        for sym, pos in self.positions.items():
-            idx = symbol_idx[sym]
-            current_price = float(price_array[idx])
-            unrealized = (current_price - pos.average_price) * pos.position
-            nav += unrealized + pos.average_price * pos.position
-        return nav
+    def net_asset_value_array(self, price_array: np.ndarray) -> float:
+        """Fast NAV: single dot‐product of positions & prices."""
+        if self._pos_array is None:
+            raise RuntimeError("symbol index not set; call set_symbol_index first")
+        return float(self.cash + price_array.dot(self._pos_array))
 
     def unrealized_pnl(self, price_dict: Dict[str, float]) -> float:
-        """Calculates the unrealized P&L of the portfolio.
-
-        Args:
-            price_dict: A dictionary mapping symbols to their current prices.
-
-        Returns:
-            The total unrealized P&L across all positions.
-        """
+        """Total unrealized P&L across all open positions."""
         total = 0.0
         for sym, pos in self.positions.items():
             total += (price_dict[sym] - pos.average_price) * pos.position
         return total
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return (
-            f"Portfolio(cash={self.cash:.2f}, realized_pnl={self.realized_pnl:.2f}, "
+            f"Portfolio(cash={self.cash:.2f}, "
+            f"realized_pnl={self.realized_pnl:.2f}, "
             f"positions={len(self.positions)})"
         )

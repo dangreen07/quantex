@@ -125,6 +125,7 @@ class EventBus:
                 dtype="float64", copy=False
             )
             self._symbol_idx = {sym: i for i, sym in enumerate(self._symbols)}
+            self.strategy.portfolio.set_symbol_index(self._symbol_idx)
 
     def run(self) -> None:
         """Runs the simulation until all data is exhausted.
@@ -188,9 +189,7 @@ class EventBus:
                     self.fills.append(fill)
 
             # Record NAV (vectorised prices dict → float conversion once)
-            nav = self.strategy.portfolio.net_asset_value_array(
-                close_price_row, self._symbol_idx
-            )
+            nav = self.strategy.portfolio.net_asset_value_array(close_price_row)
             self.nav.append(nav)
             self.timestamps.append(ts)
 

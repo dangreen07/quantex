@@ -35,6 +35,7 @@ nav:
       - Engine: reference/quantex.engine.md
       - Execution: reference/quantex.execution.md
       - Backtest: reference/quantex.backtest.md
+      - Optimizer: reference/quantex.optimizer.md
 plugins:
   - search
   - mkdocstrings:
