@@ -33,7 +33,6 @@ if TYPE_CHECKING:  # pragma: no cover
     from quantex.engine import EventBus
 
 from quantex.models import Fill, Order, Portfolio
-from quantex.sources import BacktestingDataSource
 
 
 class ImmediateFillSimulator:
@@ -173,7 +172,8 @@ class NextBarSimulator(ImmediateFillSimulator):
     def flush_pending(
         self,
         timestamp: datetime,
-        price_row: Sequence[float],
+        close_price_row: Sequence[float],
+        open_price_row: Sequence[float],
         symbol_idx: dict[str, int],
     ) -> list[Fill]:
         """Converts *all* queued orders into fills at *timestamp*.
@@ -181,7 +181,9 @@ class NextBarSimulator(ImmediateFillSimulator):
         Args:
             timestamp: The timestamp that will be assigned to each fill
                 (i.e. the *current* bar processed by the EventBus).
-            price_row: Numpy-converted prices for the current bar **aligned**
+            close_price_row: Numpy-converted close prices for the current bar **aligned**
+                to ``symbol_idx`` – obtained directly from the EventBus.
+            open_price_row: Numpy-converted open prices for the current bar **aligned**
                 to ``symbol_idx`` – obtained directly from the EventBus.
             symbol_idx: Mapping symbol→column index allowing O(1) look-ups.
 
@@ -198,30 +200,16 @@ class NextBarSimulator(ImmediateFillSimulator):
         for order in pending:
             # Prefer the *open* price for the current bar. We fetch it from
             # the underlying DataSource via the EventBus reference.
-            event_bus: EventBus | None = self.event_bus
-            ds: BacktestingDataSource | None = None
-            if event_bus is not None:
-                ds = event_bus.data_sources.get(order.symbol)
-
-            if ds is not None:
-                raw = ds.get_raw_data()
-                if timestamp not in raw.index:
-                    # In case of missing timestamp fallback to close via price_row
-                    ds = None
-                else:
-                    if self._fill_at == "open":
-                        if "open" in raw.columns:
-                            execution_price = float(raw.at[timestamp, "open"])
-                        else:
-                            execution_price = float(raw.at[timestamp, "close"])
-                    else:  # fill_at == "close"
-                        execution_price = float(raw.at[timestamp, "close"])
-            else:
-                # Fallback to price_row close price when symbol missing or ds None
+            if self._fill_at == "open":
                 idx = symbol_idx.get(order.symbol)
                 if idx is None:
                     continue
-                execution_price = float(price_row[idx])
+                execution_price = float(open_price_row[idx])
+            else:  # fill_at == "close"
+                idx = symbol_idx.get(order.symbol)
+                if idx is None:
+                    continue
+                execution_price = float(close_price_row[idx])
 
             # If price moved unfavourably we may not have enough cash for the
             # original quantity (sized with yesterday's close). Adjust down.

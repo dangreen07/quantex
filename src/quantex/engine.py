@@ -13,10 +13,17 @@ from datetime import datetime
 from typing import Mapping
 import pandas as pd
 
+# NOTE: Avoid circular import by not importing Strategy at runtime.
+# Strategy is only needed for type annotations, so we conditionally
+# import it when type checking to prevent runtime cycles.
 from quantex.execution import ImmediateFillSimulator, NextBarSimulator
 from quantex.models import Fill, Order
 from quantex.sources import BacktestingDataSource
-from quantex.strategy import Strategy
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # pragma: no cover – import solely for static analysis
+    from quantex.strategy import Strategy
 from tqdm import tqdm
 
 
@@ -30,9 +37,10 @@ class EventBus:
 
     def __init__(
         self,
-        strategy: Strategy,
+        strategy: "Strategy",
         data_sources: Mapping[str, BacktestingDataSource],
         simulator: ImmediateFillSimulator | NextBarSimulator,
+        show_progress: bool = True,
     ) -> None:
         """Initializes the EventBus.
 
@@ -44,7 +52,7 @@ class EventBus:
         self.strategy = strategy
         self.data_sources = data_sources
         self.simulator = simulator
-
+        self.show_progress = show_progress
         # Expose EventBus to the simulator (used by NextBarSimulator to fetch
         # open prices).
         setattr(self.simulator, "event_bus", self)
@@ -57,7 +65,7 @@ class EventBus:
         self.timestamps: list[datetime] = []
         # Pre-computed event timeline
         self._timeline: list[datetime] = []
-        self._price_df: pd.DataFrame | None = None
+        self._price_close_df: pd.DataFrame | None = None
 
     def _precompute_timeline(self) -> None:
         """Computes a *synchronised* global timeline.
@@ -86,25 +94,36 @@ class EventBus:
         """Builds a price matrix strictly aligned to the global timeline."""
 
         # Gather close price series for each symbol
-        price_series: dict[str, pd.Series] = {}
+        price_close_series: dict[str, pd.Series] = {}
+        price_open_series: dict[str, pd.Series] = {}
         for _, ds in self.data_sources.items():
             raw_data = ds.get_raw_data()
             if "close" in raw_data.columns and ds.symbol:
-                price_series[ds.symbol] = raw_data["close"]
+                price_close_series[ds.symbol] = raw_data["close"]
+            if "open" in raw_data.columns and ds.symbol:
+                price_open_series[ds.symbol] = raw_data["open"]
 
         # Assemble into a single DataFrame and forward-fill within each column
-        price_df = pd.DataFrame(price_series).sort_index().ffill()
+        price_close_df = pd.DataFrame(price_close_series).sort_index().ffill()
+        price_open_df = pd.DataFrame(price_open_series).sort_index().ffill()
 
         # Restrict to *only* the timestamps present in ``self._timeline`` so the
         # row index aligns 1-to-1 with the event loop.
         if self._timeline:
-            price_df = price_df.loc[self._timeline]
+            price_close_df = price_close_df.loc[self._timeline]
+            price_open_df = price_open_df.loc[self._timeline]
 
-        self._price_df = price_df
+        self._price_close_df = price_close_df
+        self._price_open_df = price_open_df
 
-        if not self._price_df.empty:
-            self._symbols = list(self._price_df.columns)
-            self._price_array = self._price_df.to_numpy(dtype="float64", copy=False)
+        if not self._price_close_df.empty and not self._price_open_df.empty:
+            self._symbols = list(self._price_close_df.columns)
+            self._price_close_array = self._price_close_df.to_numpy(
+                dtype="float64", copy=False
+            )
+            self._price_open_array = self._price_open_df.to_numpy(
+                dtype="float64", copy=False
+            )
             self._symbol_idx = {sym: i for i, sym in enumerate(self._symbols)}
 
     def run(self) -> None:
@@ -119,18 +138,23 @@ class EventBus:
         self._precompute_timeline()
         self._precompute_price_data()
 
-        if self._price_df is None:
+        if self._price_close_df is None or self._price_open_df is None:
             return  # No data to process
 
-        for row_idx, ts in tqdm(enumerate(self._timeline), total=len(self._timeline)):
+        for row_idx, ts in tqdm(
+            enumerate(self._timeline),
+            total=len(self._timeline),
+            disable=not self.show_progress,
+        ):
             self.strategy.timestamp = ts
 
-            price_row = self._price_array[row_idx]
+            close_price_row = self._price_close_array[row_idx]
+            open_price_row = self._price_open_array[row_idx]
 
             # Flush any orders queued for execution at *this* timestamp.
             if isinstance(self.simulator, NextBarSimulator):
                 new_fills = self.simulator.flush_pending(
-                    ts, price_row, self._symbol_idx
+                    ts, close_price_row, open_price_row, self._symbol_idx
                 )
             else:
                 new_fills = []
@@ -138,7 +162,7 @@ class EventBus:
 
             # Inject current market snapshot into strategy (very low overhead)
             self.strategy._update_market_data(
-                price_row, self._symbols, self._symbol_idx
+                close_price_row, open_price_row, self._symbols, self._symbol_idx
             )
 
             # Align each data source to the global timeline & advance pointer
@@ -157,14 +181,15 @@ class EventBus:
                 idx = self._symbol_idx.get(order.symbol)
                 if idx is None:
                     continue
-                execution_price = float(price_row[idx])
+                ## Execution price only matters for immediate fill simulator so close price is used
+                execution_price = float(close_price_row[idx])
                 fill = self.simulator.execute(order, execution_price, ts)
                 if fill is not None:
                     self.fills.append(fill)
 
             # Record NAV (vectorised prices dict → float conversion once)
             nav = self.strategy.portfolio.net_asset_value_array(
-                price_row, self._symbol_idx
+                close_price_row, self._symbol_idx
             )
             self.nav.append(nav)
             self.timestamps.append(ts)

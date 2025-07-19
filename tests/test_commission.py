@@ -110,7 +110,8 @@ class PercentageCommissionSimulator(NextBarSimulator):
     def flush_pending(
         self,
         timestamp: datetime,
-        price_row: Sequence[float],
+        close_price_row: Sequence[float],
+        open_price_row: Sequence[float],
         symbol_idx: dict[str, int],
     ) -> list[Fill]:
         """Override to apply percentage-based commission."""
@@ -122,7 +123,7 @@ class PercentageCommissionSimulator(NextBarSimulator):
             idx = symbol_idx.get(order.symbol)
             if idx is None:
                 continue
-            execution_price = float(price_row[idx])
+            execution_price = float(close_price_row[idx])
 
             # Calculate percentage-based commission
             trade_value = order.quantity * execution_price
@@ -161,7 +162,8 @@ class TieredCommissionSimulator(NextBarSimulator):
     def flush_pending(
         self,
         timestamp: datetime,
-        price_row: Sequence[float],
+        close_price_row: Sequence[float],
+        open_price_row: Sequence[float],
         symbol_idx: dict[str, int],
     ) -> list[Fill]:
         """Override to apply tiered commission."""
@@ -173,7 +175,7 @@ class TieredCommissionSimulator(NextBarSimulator):
             idx = symbol_idx.get(order.symbol)
             if idx is None:
                 continue
-            execution_price = float(price_row[idx])
+            execution_price = float(close_price_row[idx])
 
             # Calculate tiered commission
             trade_value = order.quantity * execution_price
@@ -251,17 +253,20 @@ class TestBasicCommission:
         assert portfolio.cash == 1000  # Cash unchanged
 
         # Flush pending orders
-        price_row = [65.0]  # Next bar price
+        close_price_row = [65.0]  # Next bar price
+        open_price_row = [60.0]  # Next bar price
         symbol_idx = {"TEST": 0}
-        fills = simulator.flush_pending(datetime(2024, 1, 2), price_row, symbol_idx)
+        fills = simulator.flush_pending(
+            datetime(2024, 1, 2), close_price_row, open_price_row, symbol_idx
+        )
 
         assert len(fills) == 1
         fill = fills[0]
         assert fill.commission == 1.50
-        assert fill.price == 65.0  # Executed at next bar price
+        assert fill.price == 60.0  # Executed at next bar price
 
         # Check cash and position
-        expected_cash = 1000 - (8 * 65.0) - 1.50
+        expected_cash = 1000 - (8 * 60.0) - 1.50
         assert portfolio.cash == expected_cash
         assert portfolio.positions["TEST"].position == 8
 
@@ -307,9 +312,12 @@ class TestCustomCommissionModels:
         simulator.execute(order, execution_price=50.0, timestamp=datetime(2024, 1, 1))
 
         # Flush at higher price
-        price_row = [60.0]
+        close_price_row = [60.0]
+        open_price_row = [50.0]
         symbol_idx = {"TEST": 0}
-        fills = simulator.flush_pending(datetime(2024, 1, 2), price_row, symbol_idx)
+        fills = simulator.flush_pending(
+            datetime(2024, 1, 2), close_price_row, open_price_row, symbol_idx
+        )
 
         fill = fills[0]
         expected_commission = 100 * 60.0 * 0.002  # Trade value * rate
@@ -361,9 +369,12 @@ class TestCustomCommissionModels:
         )
 
         # Flush all orders
-        price_row = [50.0]
+        close_price_row = [50.0]
+        open_price_row = [50.0]
         symbol_idx = {"TEST": 0}
-        fills = simulator.flush_pending(datetime(2024, 1, 2), price_row, symbol_idx)
+        fills = simulator.flush_pending(
+            datetime(2024, 1, 2), close_price_row, open_price_row, symbol_idx
+        )
 
         assert len(fills) == 3
 

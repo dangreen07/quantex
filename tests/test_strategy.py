@@ -1,4 +1,5 @@
 import pytest
+from quantex.engine import EventBus
 from quantex.strategy import Strategy
 from quantex.models import Order
 from datetime import datetime
@@ -6,6 +7,10 @@ from datetime import datetime
 
 class DummyStrategy(Strategy):
     """A concrete strategy for testing that does nothing on its own."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.event_bus: EventBus | None = None
 
     def run(self):
         pass  # pragma: no cover
@@ -127,33 +132,34 @@ class TestStrategyHelpers:
 
         # No event_bus attached
         with pytest.raises(RuntimeError, match="Strategy is not attached"):
-            _ = strat._get_price_history_df()  # type: ignore[attr-defined]
+            _ = strat._get_price_history_df()
 
         # Attach event_bus but with _price_df None – should raise second error
-        class FakeBus:
+        class FakeBus(EventBus):
             def __init__(self):
-                self._price_df = None  # type: ignore[var-annotated]
+                self._price_close_df: pd.DataFrame | None = None
+                self._price_open_df: pd.DataFrame | None = None
 
         fake_bus = FakeBus()
-        strat.event_bus = fake_bus  # type: ignore[attr-defined]
+        strat.event_bus = fake_bus
         with pytest.raises(RuntimeError, match="Price history not yet initialised"):
-            _ = strat._get_price_history_df()  # type: ignore[attr-defined]
+            _ = strat._get_price_history_df()
 
         # Provide actual DataFrame
         import pandas as pd
 
         df = pd.DataFrame({"X": [1, 2, 3]})
-        fake_bus._price_df = df  # type: ignore[attr-defined]
+        fake_bus._price_close_df = df
 
         # Should now return the DataFrame
-        returned = strat._get_price_history_df()  # type: ignore[attr-defined]
+        returned = strat._get_price_history_df()
         assert returned.equals(df)
 
     def test_buy_with_cash_and_default(self, strategy: DummyStrategy):
         """Buy helper sizes position correctly when quantity omitted."""
         strategy.timestamp = datetime(2024, 1, 1)
         # Inject fake price so helper can compute quantity
-        strategy._update_market_data([50.0], ["TEST"], {"TEST": 0})  # type: ignore[attr-defined]
+        strategy._update_market_data([50.0], [50.0], ["TEST"], {"TEST": 0})
 
         # Case 1: No args -> invest all cash
         strategy.portfolio.cash = 1_000

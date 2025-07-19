@@ -64,17 +64,20 @@ class RecordingStrategy(Strategy):
     def __init__(self, data_sources, symbols=None, initial_cash=0.0):
         super().__init__(data_sources, symbols=symbols, initial_cash=initial_cash)
         self.events = []
+        self.event_bus: EventBus | None = None
 
     def run(self):
         # This is a hack to get the test to pass.
         # In a real scenario, the Strategy class would be refactored to
         # accept the current price data directly.
-        event_bus = self.event_bus  # type: ignore
+        event_bus = self.event_bus
+        if event_bus is None:
+            return
         if (
-            event_bus._price_df is not None
-            and self.timestamp in event_bus._price_df.index
+            event_bus._price_close_df is not None
+            and self.timestamp in event_bus._price_close_df.index
         ):
-            price_dict = event_bus._price_df.loc[self.timestamp].to_dict()
+            price_dict = event_bus._price_close_df.loc[self.timestamp].to_dict()
             self.events.append((self.timestamp, price_dict))
         else:
             price_dict = {}
@@ -112,7 +115,7 @@ def test_event_bus_timestamp_synchronization():
     strategy = RecordingStrategy(data_sources, symbols=["A", "B"])
     simulator = ImmediateFillSimulator(portfolio)
     event_bus = EventBus(strategy, data_sources, simulator)
-    strategy.event_bus = event_bus  # type: ignore
+    strategy.event_bus = event_bus
 
     event_bus.run()
 

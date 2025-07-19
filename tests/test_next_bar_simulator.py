@@ -30,20 +30,23 @@ def test_next_bar_simulator_delays_execution():
     assert portfolio.cash == 1_000  # cash unchanged until fill occurs
 
     # Price row for *ts2* (close price only)
-    price_row = np.array([12.0])
+    close_price_row = np.array([12.0])
+    open_price_row = np.array([10.0])
     symbol_idx = {"TEST": 0}
 
-    fills = sim.flush_pending(ts2, price_row.tolist(), symbol_idx)
+    fills = sim.flush_pending(
+        ts2, close_price_row.tolist(), open_price_row.tolist(), symbol_idx
+    )
 
     # Exactly one fill should be generated
     assert len(fills) == 1
     fill = fills[0]
     assert fill.timestamp == ts2
-    assert fill.price == 12.0
+    assert fill.price == 10.0
 
     # Portfolio should now reflect the filled position
     assert portfolio.positions["TEST"].position == 10
-    assert portfolio.cash == 1_000 - 10 * 12.0
+    assert portfolio.cash == 1_000 - 10 * 10.0
 
 
 def test_next_bar_simulator_fill_at_close():
@@ -64,7 +67,9 @@ def test_next_bar_simulator_fill_at_close():
     )
     sim.execute(order, 10.0, ts1)
 
-    # price_row close 15
-    price_row = [15.0]
-    fills = sim.flush_pending(ts2, price_row, {"TEST": 0})
+    # price_row close 15, open 10
+    close_price_row = [15.0]
+    open_price_row = [10.0]
+    symbol_idx = {"TEST": 0}
+    fills = sim.flush_pending(ts2, close_price_row, open_price_row, symbol_idx)
     assert fills[0].price == 15.0

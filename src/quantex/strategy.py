@@ -1,4 +1,5 @@
 from quantex import DataSource
+from quantex.engine import EventBus
 from quantex.models import Position, Portfolio, Order
 from abc import ABC, abstractmethod
 from datetime import datetime
@@ -69,6 +70,7 @@ class Strategy(ABC):
         self._price_row: list[float] | None = None
         self._symbols: list[str] | None = None
         self._symbol_idx: dict[str, int] | None = None
+        self.event_bus: EventBus | None = None
 
     # ------------------------------------------------------------------
     # Convenience Properties
@@ -318,15 +320,13 @@ class Strategy(ABC):
                 first bar has not been processed).
         """
 
-        event_bus = getattr(self, "event_bus", None)
+        event_bus = self.event_bus
         if event_bus is None:
             raise RuntimeError(
                 "Strategy is not attached to an EventBus; price history unavailable."
             )
 
-        price_df: pd.DataFrame | None = (
-            event_bus._price_df
-        )  # pylint: disable=protected-access
+        price_df: pd.DataFrame | None = event_bus._price_close_df
         if price_df is None:
             raise RuntimeError(
                 "Price history not yet initialised – wait until the first bar has been processed."
@@ -369,7 +369,45 @@ class Strategy(ABC):
         return history.iloc[-lookback_period:]
 
     # Called by EventBus – should be considered *private*
-    def _update_market_data(self, price_row, symbols, symbol_idx):
-        self._price_row = price_row
+    def _update_market_data(
+        self,
+        close_price_row,
+        open_price_row=None,
+        symbols=None,
+        symbol_idx=None,
+    ):
+        # The method historically accepted only ``close_price_row``, ``symbols``,
+        # and ``symbol_idx``. We now also support an optional ``open_price_row``
+        # for simulators requiring open prices (e.g. *NextBarSimulator*). To
+        # maintain backward compatibility with older test suites or user code,
+        # all parameters except ``close_price_row`` are treated as optional.
+
+        self._price_row = close_price_row
+
+        # Fallbacks for legacy 3-arg invocation where *open_price_row* was not
+        # part of the signature: ``(close_price_row, symbols, symbol_idx)``.
+        # Detect this by checking the *type* of the second positional argument.
+
+        # Case 1: Caller supplied 3 positional args → *open_price_row* actually
+        # equals *symbols* (i.e. list[str]). We detect this by inspecting the
+        # first element – string implies symbol list.
+        if (
+            isinstance(open_price_row, list)
+            and open_price_row
+            and isinstance(open_price_row[0], str)
+        ):
+            # Shift arguments to their correct slots
+            symbols, symbol_idx = open_price_row, symbols  # type: ignore[assignment]
+            open_price_row = close_price_row  # reuse close prices as proxy
+
+        # Final fallbacks if any remain None
+        if open_price_row is None:
+            open_price_row = close_price_row
+        if symbols is None:
+            symbols = []
+        if symbol_idx is None:
+            symbol_idx = {}
+
         self._symbols = symbols
         self._symbol_idx = symbol_idx
+        self._open_price_row = open_price_row

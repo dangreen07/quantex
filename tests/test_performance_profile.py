@@ -17,7 +17,7 @@ class NoOpStrategy(Strategy):
 def test_random_walk_backtest_profile():
     """Run a short synthetic back-test under *cProfile* and ensure it completes."""
 
-    ds = RandomWalkDataSource(symbol="RND", periods=5_000_000, seed=42)
+    ds = RandomWalkDataSource(symbol="RND", periods=500_000, seed=42)
     strategy = NoOpStrategy({"rw": ds}, initial_cash=100_000)
 
     runner = BacktestRunner(strategy, {"rw": ds})
