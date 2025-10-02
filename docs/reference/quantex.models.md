@@ -1,3 +1,0 @@
-# `quantex.models`
-
-::: quantex.models 

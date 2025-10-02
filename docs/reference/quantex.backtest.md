@@ -1,3 +1,0 @@
-# `quantex.backtest`
-
-::: quantex.backtest 

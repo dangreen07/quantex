@@ -8,33 +8,15 @@ all without the heavy overhead of larger, more opinionated quant libraries.
 ---
 
 ## Documentation & Source Code
+
 To see the documentation go [here](https://dangreen07.github.io/quantex/).
 
 The source code for this library can be found [here](https://github.com/dangreen07/quantex)
 
 ---
 
-## Features
-* **Data Abstraction** – A generic `DataSource` interface that you can
-  subclass to plug in CSVs, Parquet files, live feeds, databases, etc.
-* **Back-testing Support** – A `BacktestingDataSource` base class to drive
-  offline simulations.
-* **Strategy Skeleton** – Extendable `Strategy` base class for plug-and-play
-  trading logic.
-* **Core Data Models** – Immutable `Bar`, `Tick`, `Order`, `Fill`, plus
-  stateful `Position` / `Portfolio` helpers for P&L accounting.
-* **Black + Ruff Pre-commit** – `black` auto-formats and `ruff` lints every
-  commit via *pre-commit* hooks, keeping the codebase consistent.
-* **Python 3.13+** – Embraces the latest language features.
-* **Poetry-managed** – Modern dependency management, packaging, and virtual
-  environment handling.
-
-> **Note:** The public API is still under heavy development and may change
-> until v1.0. Feedback is welcome!
-
----
-
 ## Installation
+
 Installation can be done with a single command:
 
 ```bash
@@ -44,6 +26,7 @@ pip install quantex
 ---
 
 ## Development
+
 1. Create a new branch: `git checkout -b feature/<name>`
 2. Write your code & tests.
 3. Install the git hooks once per clone: `poetry run pre-commit install`.
@@ -53,6 +36,7 @@ pip install quantex
 ---
 
 ## Contributing
+
 Contributions, bug reports, and feature requests are welcome! Please open an
 issue to discuss what you'd like to work on or submit a pull request directly.
 We follow the "fork → feature branch → pull request" workflow. By

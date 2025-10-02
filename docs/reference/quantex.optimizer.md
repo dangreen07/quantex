@@ -1,3 +1,0 @@
-# `quantex.optimizer`
-
-::: quantex.optimizer

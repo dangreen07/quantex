@@ -1,3 +1,0 @@
-# `quantex.engine`
-
-::: quantex.engine 

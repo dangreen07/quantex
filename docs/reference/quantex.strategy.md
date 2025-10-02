@@ -1,3 +1,0 @@
-# `quantex.strategy`
-
-::: quantex.strategy 

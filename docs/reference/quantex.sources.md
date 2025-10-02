@@ -1,3 +1,0 @@
-# `quantex.sources`
-
-::: quantex.sources 
