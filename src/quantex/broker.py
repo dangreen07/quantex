@@ -47,6 +47,7 @@ class Broker:
         self.cash: np.float64 = np.float64(10_000)
         self.commision: np.float64 = np.float64(0.002)
         self.commision_type: CommissionType = CommissionType.PERCENTAGE
+        self.lot_size: int = 1
         self.share_decimals = 1
         self.orders: list[Order] = []
         self.complete_orders = []
@@ -146,6 +147,18 @@ class Broker:
 
     def _credit(self, amount: np.float64): ## Take money from the market (sell shares)
         self.cash += amount
+    
+
+    def _calc_commission(self, quantity: np.float64, price: np.float64):
+        if self.commision_type == CommissionType.CASH:
+            debit = quantity * self.commision / self.lot_size
+        else:
+            debit = quantity * price * self.commision
+        return debit
+
+    def _apply_commission(self, quantity: np.float64, price: np.float64):
+        debit = self._calc_commission(quantity, price)
+        self._debit(debit)
 
     def _iterate(self, current_index: int):
         self._i = current_index
@@ -169,8 +182,8 @@ class Broker:
                                 else:
                                     self.position_avg_price = order.price
                                 self._debit(order.price * order.quantity)
+                                self._apply_commission(order.quantity, order.price)
                                 self.position = new_pos
-                                
                         else:
                             if (self.source.Open[-1] >= order.price and order.price):
                                 ## We can sell it
@@ -184,6 +197,7 @@ class Broker:
                                 else:
                                     self.position_avg_price = order.price
                                 self._credit(order.price * order.quantity)
+                                self._apply_commission(order.quantity, order.price)
                                 self.position = new_pos
                         if (order.stop_loss or order.take_profit):
                             order.status = OrderStatus.ACTIVE ## Will need to be checked on for each update
@@ -191,38 +205,43 @@ class Broker:
                             order.status = OrderStatus.COMPLETE ## We are done with it
                             to_delete.append(order)
                     else:
-                        if (order.side == OrderSide.BUY):
-                            old_pos = self.position
-                            new_pos = old_pos + order.quantity
-                            price = self.source.Open[-1]
-                            if (old_pos == 0):
-                                self.position_avg_price = price
-                            elif same_sign(old_pos, new_pos):
-                                if (abs(new_pos) > abs(old_pos)):
-                                    self.position_avg_price = (old_pos * self.position_avg_price + order.quantity * price) / new_pos
+                        try:
+                            if (order.side == OrderSide.BUY):
+                                old_pos = self.position
+                                new_pos = old_pos + order.quantity
+                                price = self.source.Open[-1]
+                                if (old_pos == 0):
+                                    self.position_avg_price = price
+                                elif same_sign(old_pos, new_pos):
+                                    if (abs(new_pos) > abs(old_pos)):
+                                        self.position_avg_price = (old_pos * self.position_avg_price + order.quantity * price) / new_pos
+                                else:
+                                    self.position_avg_price = price
+                                self._debit(self.source.Open[-1] * order.quantity)
+                                self._apply_commission(order.quantity, self.source.Open[-1])
+                                self.position = new_pos
                             else:
-                                self.position_avg_price = price
-                            self._debit(self.source.Open[-1] * order.quantity)
-                            self.position = new_pos
-                        else:
-                            old_pos = self.position
-                            new_pos = old_pos - order.quantity
-                            price = self.source.Open[-1]
-                            if (old_pos == 0):
-                                self.position_avg_price = price
-                            elif same_sign(old_pos, new_pos):
-                                if (abs(new_pos) > abs(old_pos)):
-                                    self.position_avg_price = (old_pos * self.position_avg_price + order.quantity * price) / new_pos
+                                old_pos = self.position
+                                new_pos = old_pos - order.quantity
+                                price = self.source.Open[-1]
+                                if (old_pos == 0):
+                                    self.position_avg_price = price
+                                elif same_sign(old_pos, new_pos):
+                                    if (abs(new_pos) > abs(old_pos)):
+                                        self.position_avg_price = (old_pos * self.position_avg_price + order.quantity * price) / new_pos
+                                else:
+                                    self.position_avg_price = price
+                                self._credit(self.source.Open[-1] * order.quantity)
+                                self._apply_commission(order.quantity, self.source.Open[-1])
+                                self.position = new_pos
+                            if (order.stop_loss or order.take_profit):
+                                order.status = OrderStatus.ACTIVE
                             else:
-                                self.position_avg_price = price
-                            self._credit(self.source.Open[-1] * order.quantity)
-                            self.position = new_pos
-                        if (order.stop_loss or order.take_profit):
-                            order.status = OrderStatus.ACTIVE
-                        else:
-                            order.status = OrderStatus.COMPLETE
-                            self.complete_orders.append(order)
-                            to_delete.append(order)
+                                order.status = OrderStatus.COMPLETE
+                                self.complete_orders.append(order)
+                                to_delete.append(order)
+                        except:
+                            pass
                 case OrderStatus.ACTIVE:
                     if (
                         order.side == OrderSide.BUY 
@@ -265,5 +284,5 @@ class Broker:
                             to_delete.append(order)
         for item in to_delete:
             self.orders.remove(item)
-        unrealized = self.position * self.position_avg_price
-        self.PnLRecord.iloc[len(self.source.Close)] = self.cash + unrealized
+        unrealized = self.position * self.source.Close[-1]
+        self.PnLRecord.iloc[len(self.source.Close)] = self.cash + unrealized # type: ignore
