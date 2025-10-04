@@ -5,7 +5,7 @@ from typing import final
 import numpy as np
 import pandas as pd
 from .datasource import DataSource
-from .backtester import CommissionType
+from .enums import CommissionType
 
 
 class OrderSide(Enum):
@@ -32,9 +32,18 @@ class Order:
     status: OrderStatus
     timestamp: datetime
 
+
+def same_sign(num1, num2):
+    if (num1 > 0 and num2 > 0):
+        return True
+    elif (num1 < 0 and num2 < 0):
+        return True
+    return False
+
 class Broker:
     def __init__(self, source: DataSource):
         self.position: np.float64 = np.float64(0)
+        self.position_avg_price: np.float64 = np.float64(0)
         self.cash: np.float64 = np.float64(10_000)
         self.commision: np.float64 = np.float64(0.002)
         self.commision_type: CommissionType = CommissionType.PERCENTAGE
@@ -150,13 +159,32 @@ class Broker:
                         if (order.side == OrderSide.BUY):
                             if (self.source.Open[-1] <= order.price and order.price):
                                 ## We can buy it
+                                old_pos = self.position
+                                new_pos = old_pos + order.quantity
+                                if (old_pos == 0):
+                                    self.position_avg_price = order.price
+                                elif same_sign(old_pos, new_pos):
+                                    if (abs(new_pos) > abs(old_pos)):
+                                        self.position_avg_price = (old_pos * self.position_avg_price + order.quantity * order.price) / new_pos
+                                else:
+                                    self.position_avg_price = order.price
                                 self._debit(order.price * order.quantity)
-                                self.position += order.quantity
+                                self.position = new_pos
+                                
                         else:
                             if (self.source.Open[-1] >= order.price and order.price):
                                 ## We can sell it
+                                old_pos = self.position
+                                new_pos = old_pos - order.quantity
+                                if (old_pos == 0):
+                                    self.position_avg_price = order.price
+                                elif same_sign(old_pos, new_pos):
+                                    if (abs(new_pos) > abs(old_pos)):
+                                        self.position_avg_price = (old_pos * self.position_avg_price + order.quantity * order.price) / new_pos
+                                else:
+                                    self.position_avg_price = order.price
                                 self._credit(order.price * order.quantity)
-                                self.position -= order.quantity
+                                self.position = new_pos
                         if (order.stop_loss or order.take_profit):
                             order.status = OrderStatus.ACTIVE ## Will need to be checked on for each update
                         else:
@@ -164,11 +192,31 @@ class Broker:
                             to_delete.append(order)
                     else:
                         if (order.side == OrderSide.BUY):
+                            old_pos = self.position
+                            new_pos = old_pos + order.quantity
+                            price = self.source.Open[-1]
+                            if (old_pos == 0):
+                                self.position_avg_price = price
+                            elif same_sign(old_pos, new_pos):
+                                if (abs(new_pos) > abs(old_pos)):
+                                    self.position_avg_price = (old_pos * self.position_avg_price + order.quantity * price) / new_pos
+                            else:
+                                self.position_avg_price = price
                             self._debit(self.source.Open[-1] * order.quantity)
-                            self.position += order.quantity
+                            self.position = new_pos
                         else:
+                            old_pos = self.position
+                            new_pos = old_pos - order.quantity
+                            price = self.source.Open[-1]
+                            if (old_pos == 0):
+                                self.position_avg_price = price
+                            elif same_sign(old_pos, new_pos):
+                                if (abs(new_pos) > abs(old_pos)):
+                                    self.position_avg_price = (old_pos * self.position_avg_price + order.quantity * price) / new_pos
+                            else:
+                                self.position_avg_price = price
                             self._credit(self.source.Open[-1] * order.quantity)
-                            self.position -= order.quantity
+                            self.position = new_pos
                         if (order.stop_loss or order.take_profit):
                             order.status = OrderStatus.ACTIVE
                         else:
@@ -217,4 +265,5 @@ class Broker:
                             to_delete.append(order)
         for item in to_delete:
             self.orders.remove(item)
-        self.PnLRecord.iloc[len(self.source.Close) - 1] = self.cash
+        unrealized = self.position * self.position_avg_price
+        self.PnLRecord.iloc[len(self.source.Close)] = self.cash + unrealized
