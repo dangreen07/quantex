@@ -56,7 +56,7 @@ class Broker:
         self.PnLRecord = pd.Series([self.cash] * len(self.source.data['Close']), index=self.source.data['Close'].index, dtype=np.float64)
 
     @final
-    def buy(self, quantity: float = 1, limit: np.float64 | None = None, amount: np.float64 | None = None):
+    def buy(self, quantity: float = 1, limit: np.float64 | None = None, amount: np.float64 | None = None, stop_loss: np.float64 | None = None, take_profit: np.float64 | None = None):
         ## Default to full account buy
         if (quantity > 1 or quantity <= 0):
             raise ValueError("Quantity must be between 0 and 1")
@@ -77,8 +77,8 @@ class Broker:
             quantity=total_shares, 
             type=type,
             price=limit,
-            stop_loss=None,
-            take_profit=None,
+            stop_loss=stop_loss,
+            take_profit=take_profit,
             status=OrderStatus.PENDING,
             timestamp=self.source.Index[self._i]
             )
@@ -87,7 +87,7 @@ class Broker:
             
 
     @final
-    def sell(self, quantity: float = 1, limit = None, amount: np.float64 | None = None):
+    def sell(self, quantity: float = 1, limit = None, amount: np.float64 | None = None, stop_loss: np.float64 | None = None, take_profit: np.float64 | None = None):
         ## Default to full account size sel
         ## Default to full account buy
         if (limit):
@@ -103,8 +103,8 @@ class Broker:
             quantity=total_shares, 
             type=type,
             price=limit,
-            stop_loss=None,
-            take_profit=None,
+            stop_loss=stop_loss,
+            take_profit=take_profit,
             status=OrderStatus.PENDING,
             timestamp=self.source.Index[self._i]
             )
@@ -170,7 +170,7 @@ class Broker:
                 case OrderStatus.PENDING:
                     if (order.type == OrderType.LIMIT):
                         if (order.side == OrderSide.BUY):
-                            if (self.source.Open[-1] <= order.price and order.price):
+                            if (not order.price == None and self.source.COpen <= order.price):
                                 ## We can buy it
                                 old_pos = self.position
                                 new_pos = old_pos + order.quantity
@@ -185,7 +185,7 @@ class Broker:
                                 self._apply_commission(order.quantity, order.price)
                                 self.position = new_pos
                         else:
-                            if (self.source.Open[-1] >= order.price and order.price):
+                            if (not order.price == None and self.source.COpen >= order.price):
                                 ## We can sell it
                                 old_pos = self.position
                                 new_pos = old_pos - order.quantity
@@ -209,7 +209,7 @@ class Broker:
                             if (order.side == OrderSide.BUY):
                                 old_pos = self.position
                                 new_pos = old_pos + order.quantity
-                                price = self.source.Open[-1]
+                                price = self.source.COpen
                                 if (old_pos == 0):
                                     self.position_avg_price = price
                                 elif same_sign(old_pos, new_pos):
@@ -217,13 +217,13 @@ class Broker:
                                         self.position_avg_price = (old_pos * self.position_avg_price + order.quantity * price) / new_pos
                                 else:
                                     self.position_avg_price = price
-                                self._debit(self.source.Open[-1] * order.quantity)
-                                self._apply_commission(order.quantity, self.source.Open[-1])
+                                self._debit(self.source.COpen * order.quantity)
+                                self._apply_commission(order.quantity, self.source.COpen)
                                 self.position = new_pos
                             else:
                                 old_pos = self.position
                                 new_pos = old_pos - order.quantity
-                                price = self.source.Open[-1]
+                                price = self.source.COpen
                                 if (old_pos == 0):
                                     self.position_avg_price = price
                                 elif same_sign(old_pos, new_pos):
@@ -231,8 +231,8 @@ class Broker:
                                         self.position_avg_price = (old_pos * self.position_avg_price + order.quantity * price) / new_pos
                                 else:
                                     self.position_avg_price = price
-                                self._credit(self.source.Open[-1] * order.quantity)
-                                self._apply_commission(order.quantity, self.source.Open[-1])
+                                self._credit(self.source.COpen * order.quantity)
+                                self._apply_commission(order.quantity, self.source.COpen)
                                 self.position = new_pos
                             if (order.stop_loss or order.take_profit):
                                 order.status = OrderStatus.ACTIVE
@@ -246,8 +246,8 @@ class Broker:
                     if (
                         order.side == OrderSide.BUY 
                         and (
-                            self.source.Open[-1] >= order.take_profit
-                            or self.source.Open[-1] <= order.stop_loss
+                            (order.take_profit and self.source.COpen >= order.take_profit)
+                            or (order.stop_loss and self.source.COpen <= order.stop_loss)
                             )):
                             close_order = Order(
                                 side=OrderSide.SELL, 
@@ -265,8 +265,8 @@ class Broker:
                             to_delete.append(order)
                     elif(order.side == OrderSide.SELL
                          and (
-                             self.source.Open[-1] <= order.take_profit 
-                             or self.source.Open[-1] >= order.stop_loss
+                             (order.take_profit and self.source.COpen <= order.take_profit) 
+                             or (order.stop_loss and self.source.COpen >= order.stop_loss)
                              )):
                             close_order = Order(
                                 side=OrderSide.BUY,
@@ -284,5 +284,5 @@ class Broker:
                             to_delete.append(order)
         for item in to_delete:
             self.orders.remove(item)
-        unrealized = self.position * self.source.Close[-1]
+        unrealized = self.position * self.source.CClose
         self.PnLRecord.iloc[len(self.source.Close)] = self.cash + unrealized # type: ignore
