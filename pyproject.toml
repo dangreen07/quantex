@@ -37,7 +37,6 @@ mkdocstrings-python = "^1.8.0"
 pytest-benchmark = "^4.0.0"
 pytest-cov = "^6.2.1"
 mypy = "^1.16.1"
-pandas-ta = "^0.3.14b0"
 setuptools = "^80.9.0"
 
 [build-system]
