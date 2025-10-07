@@ -6,17 +6,11 @@ authors = [
     {name = "Daniel Green",email = "dangreen07@outlook.com"}
 ]
 readme = "README.md"
-requires-python = ">=3.13,<4"
+requires-python = ">=3.10,<4"
 license = "MIT"
 dependencies = [
     "pandas (>=2.3.0,<3.0.0)",
     "fastparquet (>=2024.11.0,<2025.0.0)",
-    "pytest-xdist (>=3.8.0,<4.0.0)",
-    "matplotlib (>=3.10.3,<4.0.0)",
-    "mkdocs-to-pdf (>=0.10.1,<0.11.0)",
-    "mkdocs-material (>=9.6.15,<10.0.0)",
-    "mkdocs-mermaid2-plugin (>=1.2.1,<2.0.0)",
-    "mkdocs-print-site-plugin (>=2.7.3,<3.0.0)",
     "pyarrow (>=20.0.0,<21.0.0)",
     "tqdm (>=4.67.1,<5.0.0)",
 ]
@@ -38,6 +32,12 @@ pytest-benchmark = "^4.0.0"
 pytest-cov = "^6.2.1"
 mypy = "^1.16.1"
 setuptools = "^80.9.0"
+tox = "^4.0.0"
+mkdocs-to-pdf = {version = "^0.10.1", python = ">=3.9"}
+mkdocs-mermaid2-plugin = "^1.2.1"
+mkdocs-print-site-plugin = "^2.7.3"
+pytest-xdist = "^3.8.0"
+matplotlib = "^3.10.3"
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]

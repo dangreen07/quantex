@@ -48,6 +48,7 @@ class Broker:
         self.commision: np.float64 = np.float64(0.002)
         self.commision_type: CommissionType = CommissionType.PERCENTAGE
         self.lot_size: int = 1
+        self.margin_call: float = 0.5 ## 50% of the cash value
         self.share_decimals = 1
         self.orders: list[Order] = []
         self.complete_orders = []
@@ -290,4 +291,8 @@ class Broker:
         for item in to_delete:
             self.orders.remove(item)
         unrealized = self.position * self.source.CClose
-        self.PnLRecord[len(self.source.Close)] = self.cash + unrealized
+        equity = self.cash + unrealized
+        margin_call = self.margin_call * abs(self.position) * self.source.CClose
+        if equity < margin_call and self.position < 0:
+            self.close() ## Close all positions immediately, margin call
+        self.PnLRecord[len(self.source.Close)] = equity

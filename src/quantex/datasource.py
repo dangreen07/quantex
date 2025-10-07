@@ -71,6 +71,6 @@ class DataSource:
         return self.volume_data[self.current_index]
 
 class CSVDataSource(DataSource):
-    def __init__(self, pathname: str):
+    def __init__(self, pathname: str, train_test_split: bool = False, mode: str = "train"):
         data = pd.read_csv(pathname, index_col=0, parse_dates=[0])
-        super().__init__(data)
+        super().__init__(data, train_test_split, mode)

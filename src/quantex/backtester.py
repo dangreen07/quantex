@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 import math
+from matplotlib import pyplot as plt
 import numpy as np
 import pandas as pd
 
@@ -125,6 +126,45 @@ class BacktestReport:
     @property
     def periods_per_year(self):
         return _infer_periods_per_year(self.PnlRecord.astype(float).index, 252 * 24 * 60)
+    
+    def plot(self, figsize: tuple = (10, 5)) -> None:
+        """
+        Plot the equity curve and optionally the drawdown.
+
+        Args:
+            show_drawdown (bool): Whether to include drawdown chart.
+            figsize (tuple): Figure size for matplotlib.
+        """
+        equity = self.PnlRecord.astype(float)
+        running_max = equity.cummax()
+        drawdown = (equity - running_max) / running_max
+
+        fig, ax = plt.subplots(
+            2, figsize=figsize, sharex=True
+        )
+
+        ax_eq, ax_dd = ax
+
+        ax_eq.plot(equity.index, equity.values, label="Equity", color="tab:blue")
+        ax_eq.set_ylabel("Equity Value")
+        ax_eq.set_title("Equity Curve")
+        ax_eq.legend()
+        ax_eq.grid(alpha=0.3)
+
+        ax_dd.fill_between(
+            drawdown.index,
+            drawdown.values,
+            color="tab:red",
+            alpha=0.3,
+            label="Drawdown",
+        )
+        ax_dd.set_ylabel("Drawdown")
+        ax_dd.set_xlabel("Date")
+        ax_dd.legend()
+        ax_dd.grid(alpha=0.3)
+
+        plt.tight_layout()
+        plt.show()
 
     def __str__(self) -> str:
         equity = self.PnlRecord.astype(float)
@@ -179,19 +219,22 @@ class SimpleBacktester():
                 cash: float = 10_000, 
                 commission: float = 0.002, 
                 commission_type: CommissionType = CommissionType.PERCENTAGE,
-                lot_size: int = 1
+                lot_size: int = 1,
+                margin_call: float = 0.5 ## 50% of the cash lost
                 ):
         self.strategy = copy.deepcopy(strategy)
         self.cash = cash
         self.commission = commission
         self.commission_type = commission_type
         self.lot_size = lot_size
+        self.margin_call = margin_call
         source = self.strategy.positions[list(self.strategy.positions.keys())[0]].source
         self.PnLRecord = np.zeros(len(source.data['Close']), dtype=np.float64)
     def run(self, progress_bar: bool = False) -> BacktestReport:
         for key in self.strategy.positions.keys():
             self.strategy.positions[key].cash = np.float64(self.cash)
             self.strategy.positions[key].lot_size = self.lot_size
+            self.strategy.positions[key].margin_call = self.margin_call
             self.strategy.positions[key].commision = np.float64(self.commission)
             self.strategy.positions[key].commision_type = self.commission_type
 
@@ -447,11 +490,10 @@ class SimpleBacktester():
 
             scores = []
             for _, r in results_df.iterrows():
-                s = _to_score(r.get("sharpe"))
-                if s is None:
-                    s = _to_score(r.get("total_return"))
-                if s is None:
-                    s = _to_score(r.get("final_cash"))
+                ret = r.get("total_return")
+                s = None
+                if (not ret == None and ret > 0):
+                    s = _to_score(r.get("sharpe"))
                 scores.append(s if s is not None else float("-inf"))
             results_df["_score"] = scores
             results_df.sort_values(by=["_score"], ascending=False, inplace=True, kind="mergesort")
