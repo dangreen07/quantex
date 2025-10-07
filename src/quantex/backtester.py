@@ -72,8 +72,8 @@ def _worker_eval(param_items):
     bt = SimpleBacktester(
         strat,
         cash=_WORKER_BT_CONFIG["cash"],
-        commision=_WORKER_BT_CONFIG["commision"],
-        commision_type=_WORKER_BT_CONFIG["commision_type"],
+        commission=_WORKER_BT_CONFIG["commision"],
+        commission_type=_WORKER_BT_CONFIG["commision_type"],
         lot_size=_WORKER_BT_CONFIG["lot_size"],
     )
     report = bt.run(progress_bar=False)
@@ -177,14 +177,14 @@ class SimpleBacktester():
     def __init__(self, 
                  strategy: Strategy,
                 cash: float = 10_000, 
-                commision: float = 0.002, 
-                commision_type: CommissionType = CommissionType.PERCENTAGE,
+                commission: float = 0.002, 
+                commission_type: CommissionType = CommissionType.PERCENTAGE,
                 lot_size: int = 1
                 ):
         self.strategy = copy.deepcopy(strategy)
         self.cash = cash
-        self.commision = commision
-        self.commision_type = commision_type
+        self.commission = commission
+        self.commission_type = commission_type
         self.lot_size = lot_size
         source = self.strategy.positions[list(self.strategy.positions.keys())[0]].source
         self.PnLRecord = pd.Series([0] * len(source.data['Close']), index=source.data['Close'].index, dtype=np.float64)
@@ -192,8 +192,8 @@ class SimpleBacktester():
         for key in self.strategy.positions.keys():
             self.strategy.positions[key].cash = np.float64(self.cash)
             self.strategy.positions[key].lot_size = self.lot_size
-            self.strategy.positions[key].commision = np.float64(self.commision)
-            self.strategy.positions[key].commision_type = self.commision_type
+            self.strategy.positions[key].commision = np.float64(self.commission)
+            self.strategy.positions[key].commision_type = self.commission_type
 
         self.strategy.init()
         ## Simple backtesting loop
@@ -276,8 +276,8 @@ class SimpleBacktester():
             bt = SimpleBacktester(
                 strat_copy,
                 cash=self.cash,
-                commision=self.commision,
-                commision_type=self.commision_type,
+                commission=self.commission,
+                commission_type=self.commission_type,
                 lot_size=self.lot_size,
             )
             report = bt.run(progress_bar=False)
@@ -421,8 +421,8 @@ class SimpleBacktester():
             initargs=(
                 pickled_strategy,
                 self.cash,
-                self.commision,
-                self.commision_type,
+                self.commission,
+                self.commission_type,
                 self.lot_size,
             ),
         ) as exe:
@@ -471,8 +471,8 @@ class SimpleBacktester():
         bt = SimpleBacktester(
             strat_copy,
             cash=self.cash,
-            commision=self.commision,
-            commision_type=self.commision_type,
+            commission=self.commission,
+            commission_type=self.commission_type,
             lot_size=self.lot_size,
         )
         best_report = bt.run(progress_bar=False)
