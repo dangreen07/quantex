@@ -9,10 +9,10 @@ class DataSource:
         self.data = df
         if (train_test_split and mode == "train"):
             index = math.floor(len(df.index) * 0.8)
-            self.data = self.data[df.index[:index]]
+            self.data = self.data.iloc[:index]
         elif (train_test_split and mode == "test"):
             index = math.floor(len(df.index) * 0.8)
-            self.data = self.data[df.index[index:]]
+            self.data = self.data.iloc[index:]
         if not all(col in self.data.columns for col in self.required_columns):
             raise ValueError(f"Dataframe requires the following columns: {self.required_columns}")
         self.current_index = len(self.data)

@@ -187,8 +187,8 @@ class SimpleBacktester():
         self.commission_type = commission_type
         self.lot_size = lot_size
         source = self.strategy.positions[list(self.strategy.positions.keys())[0]].source
-        self.PnLRecord = pd.Series([0] * len(source.data['Close']), index=source.data['Close'].index, dtype=np.float64)
-    def run(self, progress_bar: bool = True) -> BacktestReport:
+        self.PnLRecord = np.zeros(len(source.data['Close']), dtype=np.float64)
+    def run(self, progress_bar: bool = False) -> BacktestReport:
         for key in self.strategy.positions.keys():
             self.strategy.positions[key].cash = np.float64(self.cash)
             self.strategy.positions[key].lot_size = self.lot_size
@@ -208,13 +208,14 @@ class SimpleBacktester():
         orders: list[Order] = []
         for val in self.strategy.positions.values():
             val.close()
-            self.PnLRecord = self.PnLRecord.add(val.PnLRecord) # type: ignore
+            self.PnLRecord += val.PnLRecord
             orders.extend(val.complete_orders)
-        
+
+        index = list(self.strategy.positions.values())[0].source.data['Close'].index
         return BacktestReport(
-            starting_cash=np.float64(self.cash), 
-            final_cash=self.PnLRecord.iloc[-1], 
-            PnlRecord=self.PnLRecord,
+            starting_cash=np.float64(self.cash),
+            final_cash=self.PnLRecord[-1],
+            PnlRecord=pd.Series(self.PnLRecord, index=index),
             orders=orders)
     
     def optimize(self, params: dict[str, range], constraint: Callable[[dict[str, Any]], bool] | None = None):

@@ -53,7 +53,7 @@ class Broker:
         self.complete_orders = []
         self._i = 0
         self.source = source
-        self.PnLRecord = pd.Series([self.cash] * len(self.source.data['Close']), index=self.source.data['Close'].index, dtype=np.float64)
+        self.PnLRecord = np.full(len(self.source.data['Close']), self.cash, dtype=np.float64)
 
     @final
     def buy(self, quantity: float = 1, limit: np.float64 | None = None, amount: np.float64 | None = None, stop_loss: np.float64 | None = None, take_profit: np.float64 | None = None):
@@ -88,8 +88,13 @@ class Broker:
 
     @final
     def sell(self, quantity: float = 1, limit = None, amount: np.float64 | None = None, stop_loss: np.float64 | None = None, take_profit: np.float64 | None = None):
-        ## Default to full account size sel
-        ## Default to full account buy
+        ## Default to full account size sell
+        if (quantity > 1 or quantity <= 0):
+            raise ValueError("Quantity must be between 0 and 1")
+        if (limit and limit < 0):
+            raise ValueError("Cannot have a negative limit price")
+        if (amount and amount < 0):
+            raise ValueError("Cannot have a negative amount!")
         if (limit):
             type = OrderType.LIMIT
         else:
@@ -285,4 +290,4 @@ class Broker:
         for item in to_delete:
             self.orders.remove(item)
         unrealized = self.position * self.source.CClose
-        self.PnLRecord.iloc[len(self.source.Close)] = self.cash + unrealized # type: ignore
+        self.PnLRecord[len(self.source.Close)] = self.cash + unrealized

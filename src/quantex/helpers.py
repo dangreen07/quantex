@@ -10,9 +10,9 @@ class TimeNDArray(np.ndarray, Generic[T]):
             return
         src_i = getattr(obj, "_i", None)
         if src_i is None:
-            self._i = self.shape[0]
+            self._i = self.shape[0] if self.ndim > 0 else 1
         else:
-            self._i = min(src_i, self.shape[0])
+            self._i = min(src_i, self.shape[0] if self.ndim > 0 else 1)
 
     @classmethod
     def from_array(cls, arr: npt.NDArray[T]) -> "TimeNDArray[T]":
@@ -69,7 +69,7 @@ class TimeNDArray(np.ndarray, Generic[T]):
                 new_idx = (new_first,) + rest
                 res = super().__getitem__(new_idx)
                 if isinstance(res, TimeNDArray):
-                    res._i = res.shape[0]
+                    res._i = res.shape[0] if res.ndim > 0 else 1
                 return res
 
             # numpy array for first axis
@@ -84,7 +84,7 @@ class TimeNDArray(np.ndarray, Generic[T]):
                     new_idx = (mask,) + rest
                     res = super().__getitem__(new_idx)
                     if isinstance(res, TimeNDArray):
-                        res._i = res.shape[0]
+                        res._i = res.shape[0] if res.ndim > 0 else 1
                     return res
                 else:
                     arr = first.copy()
@@ -95,7 +95,7 @@ class TimeNDArray(np.ndarray, Generic[T]):
                     new_idx = (arr,) + rest
                     res = super().__getitem__(new_idx)
                     if isinstance(res, TimeNDArray):
-                        res._i = res.shape[0]
+                        res._i = res.shape[0] if res.ndim > 0 else 1
                     return res
 
         # Single integer index
@@ -119,7 +119,7 @@ class TimeNDArray(np.ndarray, Generic[T]):
                 mask[self._i :] = False
                 res = super().__getitem__(mask)
                 if isinstance(res, TimeNDArray):
-                    res._i = res.shape[0]
+                    res._i = res.shape[0] if res.ndim > 0 else 1
                 return res
             else:
                 arr = idx.copy()
@@ -128,7 +128,7 @@ class TimeNDArray(np.ndarray, Generic[T]):
                     raise IndexError("index out of bounds (beyond _i)")
                 res = super().__getitem__(arr)
                 if isinstance(res, TimeNDArray):
-                    res._i = res.shape[0]
+                    res._i = res.shape[0] if res.ndim > 0 else 1
                 return res
 
         # Fallback: do the indexing, then convert/truncate axis 0 visibility.
@@ -137,7 +137,7 @@ class TimeNDArray(np.ndarray, Generic[T]):
             res._i = min(res._i, res.shape[0])
         elif isinstance(res, np.ndarray) and res.ndim >= 1:
             ta = res.view(TimeNDArray)
-            ta._i = min(self._i, ta.shape[0])
+            ta._i = min(self._i, ta.shape[0] if ta.ndim > 0 else 1)
             return ta
         return res
 
