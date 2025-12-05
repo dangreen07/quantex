@@ -39,6 +39,22 @@ DateTime,Open,High,Low,Close,Volume
 ...
 ```
 
+### Parquet Data Source
+
+Another method is to use the `ParquetDataSource`:
+
+```python
+from quantex import ParquetDataSource
+
+# Load data from CSV file
+data_source = ParquetDataSource('data/EURUSD_M1.csv')
+
+# Access basic information
+print(f"Data length: {len(data_source)}")
+print(f"Columns: {list(data_source.data.columns)}")
+print(f"Date range: {data_source.Index[0]} to {data_source.Index[-1]}")
+```
+
 **Requirements:**
 - First column must be datetime (index column)
 - Required columns: `Open`, `High`, `Low`, `Close`, `Volume`
