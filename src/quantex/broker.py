@@ -144,6 +144,15 @@ class Broker:
                 timestamp=self.source.Index[self._i]
                 )
             self.orders.append(order)
+    
+    def is_long(self):
+        return self.position > 0
+    
+    def is_short(self):
+        return self.position < 0
+    
+    def is_closed(self):
+        return self.position == 0
 
     def _debit(self, amount: np.float64): ## Give money to the market (buy shares)
         if (self.cash - amount < 0):

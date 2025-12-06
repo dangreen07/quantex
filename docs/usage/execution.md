@@ -150,9 +150,9 @@ def next(self):
     print(f"Available Cash: ${position.cash:,.2f}")
 
     # Position status
-    if position.position > 0:
+    if position.is_long():
         print("Currently LONG")
-    elif position.position < 0:
+    elif position.is_short():
         print("Currently SHORT")
     else:
         print("Currently FLAT")
@@ -171,7 +171,7 @@ def calculate_unrealized_pnl(self):
     position = self.positions['EURUSD']
     current_price = self.data['EURUSD'].CClose
 
-    if position.position == 0:
+    if position.is_closed():
         return 0.0
 
     # Calculate PnL based on position and current price
@@ -214,27 +214,6 @@ class RiskManagedStrategy(Strategy):
                 stop_loss=stop_loss,
                 take_profit=take_profit
             )
-```
-
-### Dynamic Risk Management
-
-```python
-def next(self):
-    position = self.positions['EURUSD']
-
-    # Adjust stop loss based on profit
-    if position.position > 0:
-        entry_price = position.position_avg_price
-        current_price = self.data['EURUSD'].CClose
-        profit_pct = (current_price - entry_price) / entry_price
-
-        # Trail stop loss if profitable
-        if profit_pct > 0.02:  # If 2% profit
-            new_stop = current_price * 0.99  # Trail at 1% below current
-
-            # Update stop loss for existing position
-            # Note: This would require modifying the broker implementation
-            # For now, this is conceptual
 ```
 
 ## Commission and Fees
@@ -291,7 +270,7 @@ class BuyAndHoldStrategy(Strategy):
     def next(self):
         # Buy on first day and hold
         if not self.entered and len(self.data['EURUSD'].Close) > 1:
-            self.positions['EURUSD'].buy(1.0)  # Use all available cash
+            self.positions['EURUSD'].buy()  # Use all available cash
             self.entered = True
 ```
 
@@ -316,11 +295,11 @@ class MeanReversionStrategy(Strategy):
         z_score = (current_price - self.mean[-1]) / self.std[-1]
 
         # Buy when price is significantly below mean
-        if z_score < -2.0 and self.positions['EURUSD'].position <= 0:
+        if z_score < -2.0 and (self.positions['EURUSD'].is_short() or self.positions['EURUSD'].is_closed()):
             self.positions['EURUSD'].buy(0.5)
 
         # Sell when price is significantly above mean
-        elif z_score > 2.0 and self.positions['EURUSD'].position >= 0:
+        elif z_score > 2.0 and (self.positions['EURUSD'].is_long() or self.positions['EURUSD'].is_closed()):
             self.positions['EURUSD'].sell(0.5)
 
     def calculate_sma(self, prices, period):

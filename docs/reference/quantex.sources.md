@@ -135,8 +135,8 @@ Specialized data source for loading data from CSV files.
 
 ```python
 class CSVDataSource(DataSource):
-    def __init__(self, pathname: str, train_test_split: bool = False, mode: str = "train"):
-        data = pd.read_csv(pathname, index_col=0, parse_dates=[0])
+    def __init__(self, pathname: str, train_test_split: bool = False, mode: str = "train", index_col: str = '0'):
+        data = pd.read_csv(pathname, index_col=index_col, parse_dates=[index_col])
         super().__init__(data, train_test_split, mode)
 ```
 
@@ -146,8 +146,8 @@ Specialized data source for loading data from Parquet files.
 
 ```python
 class ParquetDataSource(DataSource):
-    def __init__(self, pathname: str, train_test_split: bool = False, mode: str = "train"):
-        data = pd.read_parquet(pathname, index_col=0, parse_dates=[0])
+    def __init__(self, pathname: str, train_test_split: bool = False, mode: str = "train", index_col: str = '0'):
+        data = pd.read_parquet(pathname, index_col=index_col, parse_dates=[index_col])
         super().__init__(data, train_test_split, mode)
 ```
 
