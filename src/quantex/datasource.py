@@ -76,6 +76,6 @@ class CSVDataSource(DataSource):
         super().__init__(data, train_test_split, mode)
 
 class ParquetDataSource(DataSource):
-    def __init__(self, pathname: str, train_test_split: bool = False, mode: str = "train", index_col: str = '0'):
-        data = pd.read_parquet(pathname, index_col=index_col, parse_dates=[index_col])
+    def __init__(self, pathname: str, train_test_split: bool = False, mode: str = "train"):
+        data = pd.read_parquet(pathname)
         super().__init__(data, train_test_split, mode)
