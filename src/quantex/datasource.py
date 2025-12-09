@@ -95,7 +95,7 @@ class DataSource:
             np.ndarray: Array of open prices for all historical data points
                 up to the current iteration index.
         """
-        return self.open_data[:self.current_index]
+        return self.open_data[:self.current_index+1]
     
     @property
     def High(self):
@@ -106,7 +106,7 @@ class DataSource:
             np.ndarray: Array of high prices for all historical data points
                 up to the current iteration index.
         """
-        return self.high_data[:self.current_index]
+        return self.high_data[:self.current_index+1]
     
     @property
     def Low(self):
@@ -117,7 +117,7 @@ class DataSource:
             np.ndarray: Array of low prices for all historical data points
                 up to the current iteration index.
         """
-        return self.low_data[:self.current_index]
+        return self.low_data[:self.current_index+1]
     
     @property
     def Close(self):
@@ -128,7 +128,7 @@ class DataSource:
             np.ndarray: Array of close prices for all historical data points
                 up to the current iteration index.
         """
-        return self.close_data[:self.current_index]
+        return self.close_data[:self.current_index+1]
     
     @property
     def Volume(self):
@@ -139,7 +139,7 @@ class DataSource:
             np.ndarray: Array of volume values for all historical data points
                 up to the current iteration index.
         """
-        return self.volume_data[:self.current_index]
+        return self.volume_data[:self.current_index+1]
     
     @property
     def COpen(self) -> np.float64:

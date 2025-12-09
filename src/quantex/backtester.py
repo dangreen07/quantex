@@ -218,6 +218,12 @@ class BacktestReport:
         """
         return _infer_periods_per_year(self.PnlRecord.astype(float).index, 252 * 24 * 60)
     
+    @property
+    def total_return(self):
+        equity = self.PnlRecord.astype(float)
+        tot_return = float(equity.iloc[-1] / equity.iloc[0] - 1.0)
+        return tot_return
+
     def plot(self, figsize: tuple = (10, 5)) -> None:
         """
         Plot the equity curve and drawdown charts.
@@ -311,7 +317,7 @@ class BacktestReport:
         return (
             f"Starting Cash: ${self.starting_cash:,.2f}\n"
             f"Final Cash: ${self.final_cash:,.2f}\n"
-            f"Total Return: {tot_return:.2%}\n"
+            f"Total Return: {tot_return:,.2%}\n"
             f"Sharpe Ratio: {sharpe:.2f}" if np.isfinite(sharpe) else
             f"Sharpe Ratio: nan"
         ) + (
@@ -405,22 +411,33 @@ class SimpleBacktester():
             should not be called multiple times on the same instance
             without resetting.
         """
+        # Distribute the initial portfolio cash evenly across all symbols so that
+        # the aggregate starting equity equals `self.cash`, regardless of the
+        # number of data sources attached to the strategy. This avoids
+        # double-counting cash when multiple symbols are used.
+        n_positions = max(len(self.strategy.positions), 1)
+        per_position_cash = np.float64(self.cash / n_positions)
+
         for key in self.strategy.positions.keys():
-            self.strategy.positions[key].cash = np.float64(self.cash)
-            self.strategy.positions[key].lot_size = self.lot_size
-            self.strategy.positions[key].margin_call = self.margin_call
-            self.strategy.positions[key].commision = np.float64(self.commission)
-            self.strategy.positions[key].commision_type = self.commission_type
+            broker = self.strategy.positions[key]
+            broker.cash = per_position_cash
+            broker.lot_size = self.lot_size
+            broker.margin_call = self.margin_call
+            broker.commision = np.float64(self.commission)
+            broker.commision_type = self.commission_type
 
         self.strategy.init()
         ## Simple backtesting loop
-        for i in tqdm(range(1, max([len(i) for i in self.strategy.data.values()])), disable=(not progress_bar)):
+        for i in tqdm(range(0, max([len(i) for i in self.strategy.data.values()])), disable=(not progress_bar)):
             for val in self.strategy.data.values():
                 val.current_index = i
             for val in self.strategy.positions.values():
                 val._iterate(i)
             for item in self.strategy.indicators:
-                item._i = i
+                # Make indicators time-aware in the same way as DataSource:
+                # at step i, expose data up to and including index i.
+                # Clamp to the underlying array length to avoid overflow.
+                item._i = min(i + 1, item.shape[0])
             self.strategy.next()
         orders: list[Order] = []
         for val in self.strategy.positions.values():

@@ -49,11 +49,11 @@ class TestDataSource:
         ds = DataSource(sample_data)
         ds.current_index = 50
 
-        assert len(ds.Open) == 50
-        assert len(ds.High) == 50
-        assert len(ds.Low) == 50
-        assert len(ds.Close) == 50
-        assert len(ds.Volume) == 50
+        assert len(ds.Open) == 51
+        assert len(ds.High) == 51
+        assert len(ds.Low) == 51
+        assert len(ds.Close) == 51
+        assert len(ds.Volume) == 51
 
         assert isinstance(ds.COpen, np.float64)
         assert isinstance(ds.CClose, np.float64)

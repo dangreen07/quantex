@@ -24,19 +24,19 @@ class TimeNDArray(np.ndarray, Generic[T]):
     available progressively over time, and only data up to the current
     time step should be visible to the strategy.
     
-    Example:
+    Example:  
         >>> import numpy as np  
         >>> data = np.array([1, 2, 3, 4, 5])  
         >>> time_arr = TimeNDArray.from_array(data)  
         >>> print(time_arr._i)  # Shows full length  
-        5  
+            5  
         >>> print(time_arr.visible())  # Array up to _i  
-        [1 2 3 4 5]  
+            [1 2 3 4 5]  
         >>> time_arr._i = 3  # Only first 3 elements visible  
         >>> print(len(time_arr))  # Shows 3  
-        3  
+            3  
         >>> print(time_arr[:2])  # First 2 visible elements  
-        [1 2]  
+            [1 2]  
     """
     def __array_finalize__(self, obj: Any) -> None:
         """
