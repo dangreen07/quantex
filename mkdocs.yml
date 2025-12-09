@@ -29,13 +29,12 @@ nav:
       - Technical Indicators: usage/indicators.md
       - Parameter Optimizer: usage/optimizer.md
   - API Reference:
-      - Models: reference/quantex.models.md
-      - Sources: reference/quantex.sources.md
-      - Strategy: reference/quantex.strategy.md
-      - Engine: reference/quantex.engine.md
-      - Execution: reference/quantex.execution.md
-      - Backtest: reference/quantex.backtest.md
-      - Optimizer: reference/quantex.optimizer.md
+      - Backtester: reference/backtester.md
+      - Broker: reference/broker.md
+      - Datasource: reference/datasource.md
+      - Enums: reference/enums.md
+      - Helpers: reference/helpers.md
+      - Strategy: reference/strategy.md
 plugins:
   - search
   - mkdocstrings:

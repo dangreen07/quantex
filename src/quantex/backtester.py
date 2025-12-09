@@ -17,12 +17,50 @@ import os
 import gc
 
 def max_drawdown(equity: pd.Series) -> float:
+    """
+    Calculate the maximum drawdown of an equity curve.
+    
+    The maximum drawdown represents the largest peak-to-trough decline
+    in the equity curve, expressed as a positive percentage.
+    
+    Args:
+        equity (pd.Series): Time series of equity values.
+        
+    Returns:
+        float: Maximum drawdown as a positive percentage (e.g., 0.15 for 15%).
+        
+    Example:
+        >>> equity = pd.Series([100, 110, 95, 105, 90])  
+        >>> max_drawdown(equity)  
+        0.18181818181818182  # ~18.18% drawdown
+    """
     running_max = equity.cummax()
     drawdown = (equity - running_max) / running_max
     max_dd = drawdown.min()
     return float(abs(max_dd))  # return as positive percentage
 
 def _infer_periods_per_year(index: pd.Index, default: int = 252 * 24 * 60) -> int:
+    """
+    Infer the number of trading periods per year from a datetime index.
+    
+    This function analyzes the time differences in the index to determine
+    the appropriate number of periods per year for annualized calculations.
+    Falls back to minute-level trading (252 trading days * 24 hours * 60 minutes)
+    if the index cannot be analyzed or contains insufficient data.
+    
+    Args:
+        index (pd.Index): DatetimeIndex containing timestamps.
+        default (int, optional): Default periods per year for minute trading.
+            Defaults to 252 * 24 * 60 (minute-level data).
+            
+    Returns:
+        int: Estimated number of trading periods per year.
+        
+    Example:
+        >>> dates = pd.date_range('2020-01-01', periods=100, freq='D')  
+        >>> _infer_periods_per_year(dates)  
+        252  # Daily trading periods
+    """
     # Simple inference; falls back to minute trading year if uncertain
     if not isinstance(index, pd.DatetimeIndex) or len(index) < 3:
         return default
@@ -39,8 +77,22 @@ def _infer_periods_per_year(index: pd.Index, default: int = 252 * 24 * 60) -> in
 def _worker_init(pickled_strategy: bytes, cash: float, commision: float,
                  commision_type, lot_size: int):
     """
-    Initializer for worker processes. Stores a pickled strategy and
-    backtest config in module globals so each worker reuses them.
+    Initializer for worker processes in parallel optimization.
+    
+    This function stores a pickled strategy and backtest configuration
+    in module globals so each worker process can reuse them for
+    parallel parameter optimization.
+    
+    Args:
+        pickled_strategy (bytes): Serialized strategy instance.
+        cash (float): Initial cash amount for backtesting.
+        commision (float): Commission rate for trades.
+        commision_type: Type of commission calculation (CommissionType enum).
+        lot_size (int): Size of trading lots.
+        
+    Note:
+        This function is designed to be called by worker processes
+        during parallel optimization and should not be used directly.
     """
     global _WORKER_PICKLED_STRAT, _WORKER_BT_CONFIG
     _WORKER_PICKLED_STRAT = pickled_strategy
@@ -53,10 +105,27 @@ def _worker_init(pickled_strategy: bytes, cash: float, commision: float,
 
 def _worker_eval(param_items):
     """
-    Worker evaluation function.
-
-    param_items: sequence of (key, value) pairs (tuple) to reconstruct dict
-    Returns a small dict with metrics (no heavy objects).
+    Worker evaluation function for parallel parameter optimization.
+    
+    This function runs in worker processes to evaluate a single
+    parameter combination and return performance metrics.
+    
+    Args:
+        param_items: Sequence of (key, value) pairs (tuple) to reconstruct dict.
+                    Each tuple represents a parameter name and its value.
+                    
+    Returns:
+        dict: Dictionary containing metrics for the evaluated parameters:
+            - 'params': Dictionary of parameter values used
+            - 'final_cash': Final cash amount after backtest
+            - 'total_return': Total return as decimal (e.g., 0.15 for 15%)
+            - 'sharpe': Sharpe ratio (or NaN if invalid)
+            - 'max_drawdown': Maximum drawdown as decimal
+            - 'trades': Number of trades executed
+            
+    Note:
+        This function is designed for use in worker processes during
+        parallel optimization and should not be called directly.
     """
     global _WORKER_PICKLED_STRAT, _WORKER_BT_CONFIG
     # Reconstruct params dict
@@ -118,6 +187,19 @@ def _worker_eval(param_items):
 
 @dataclass
 class BacktestReport:
+    """
+    Container for backtest results and performance metrics.
+    
+    This class encapsulates the complete results of a backtest run,
+    including P&L records, orders executed, and calculated performance
+    metrics such as Sharpe ratio and maximum drawdown.
+    
+    Attributes:
+        starting_cash (np.float64): Initial cash amount at start of backtest.
+        final_cash (np.float64): Final cash amount at end of backtest.
+        PnlRecord (pd.Series): Time series of P&L values throughout the backtest.
+        orders (list[Order]): List of all orders executed during the backtest.
+    """
     starting_cash: np.float64
     final_cash: np.float64
     PnlRecord: pd.Series
@@ -125,15 +207,32 @@ class BacktestReport:
 
     @property
     def periods_per_year(self):
+        """
+        Calculate the number of trading periods per year.
+        
+        This property infers the appropriate number of periods per year
+        from the P&L record index, useful for annualized calculations.
+        
+        Returns:
+            int: Number of trading periods per year (e.g., 252 for daily data).
+        """
         return _infer_periods_per_year(self.PnlRecord.astype(float).index, 252 * 24 * 60)
     
     def plot(self, figsize: tuple = (10, 5)) -> None:
         """
-        Plot the equity curve and optionally the drawdown.
-
+        Plot the equity curve and drawdown charts.
+        
+        Creates a two-panel plot showing:
+        1. The equity curve over time
+        2. The drawdown curve as a percentage
+        
         Args:
-            show_drawdown (bool): Whether to include drawdown chart.
-            figsize (tuple): Figure size for matplotlib.
+            figsize (tuple, optional): Figure size as (width, height) in inches.
+                Defaults to (10, 5).
+                
+        Note:
+            This method uses matplotlib to display the plots and requires
+            an interactive environment to show the figures.
         """
         equity = self.PnlRecord.astype(float)
         running_max = equity.cummax()
@@ -167,6 +266,16 @@ class BacktestReport:
         plt.show()
 
     def __str__(self) -> str:
+        """
+        Generate a formatted string summary of backtest results.
+        
+        Returns a human-readable string containing key performance
+        metrics including total return, Sharpe ratio with confidence
+        intervals, maximum drawdown, and total number of trades.
+        
+        Returns:
+            str: Formatted string with backtest summary statistics.
+        """
         equity = self.PnlRecord.astype(float)
         returns = equity.pct_change().dropna()
 
@@ -214,6 +323,29 @@ class BacktestReport:
         )
 
 class SimpleBacktester():
+    """
+    Simple backtester for executing trading strategies on historical data.
+    
+    This class provides functionality to run backtests on trading strategies,
+    calculate performance metrics, and perform parameter optimization through
+    grid search (both sequential and parallel).
+    
+    The backtester simulates realistic trading conditions including:
+    - Order execution with market and limit orders
+    - Commission calculations
+    - Position management
+    - Margin calls
+    - P&L tracking
+    
+    Example:
+        >>> from quantex import SimpleBacktester, CSVDataSource  
+        >>> # Create strategy and data source  
+        >>> source = CSVDataSource("data.csv")  
+        >>> # strategy = MyStrategy()  # Your custom strategy  
+        >>> bt = SimpleBacktester(strategy, cash=10000)  
+        >>> report = bt.run()  
+        >>> print(report)  
+    """
     def __init__(self, 
                  strategy: Strategy,
                 cash: float = 10_000, 
@@ -222,6 +354,24 @@ class SimpleBacktester():
                 lot_size: int = 1,
                 margin_call: float = 0.5 ## 50% of the cash lost
                 ):
+        """
+        Initialize the backtester with strategy and configuration parameters.
+        
+        Args:
+            strategy (Strategy): Trading strategy to backtest. Must implement
+                the Strategy interface with init() and next() methods.
+            cash (float, optional): Initial cash amount. Defaults to 10,000.
+            commission (float, optional): Commission rate per trade. Defaults to 0.002 (0.2%).
+            commission_type (CommissionType, optional): Type of commission calculation.
+                Can be CommissionType.PERCENTAGE or CommissionType.CASH.
+                Defaults to CommissionType.PERCENTAGE.
+            lot_size (int, optional): Size of trading lots. Defaults to 1.
+            margin_call (float, optional): Margin call threshold as fraction of
+                cash value. Defaults to 0.5 (50%).
+                
+        Raises:
+            ValueError: If strategy is None or commission rate is negative.
+        """
         self.strategy = copy.deepcopy(strategy)
         self.cash = cash
         self.commission = commission
@@ -231,6 +381,30 @@ class SimpleBacktester():
         source = self.strategy.positions[list(self.strategy.positions.keys())[0]].source
         self.PnLRecord = np.zeros(len(source.data['Close']), dtype=np.float64)
     def run(self, progress_bar: bool = False) -> BacktestReport:
+        """
+        Execute the backtest for the configured strategy.
+        
+        This method runs the complete backtest simulation, iterating through
+        all data points in the strategy's data sources, executing strategy logic,
+        processing orders, and tracking performance metrics.
+        
+        Args:
+            progress_bar (bool, optional): Whether to show a progress bar during
+                backtest execution. Useful for long-running backtests.
+                Defaults to False.
+                
+        Returns:
+            BacktestReport: Object containing complete backtest results including:
+                - Starting and final cash amounts
+                - P&L record over time
+                - List of all executed orders
+                - Calculated performance metrics
+                
+        Note:
+            This method modifies the internal state of the strategy and
+            should not be called multiple times on the same instance
+            without resetting.
+        """
         for key in self.strategy.positions.keys():
             self.strategy.positions[key].cash = np.float64(self.cash)
             self.strategy.positions[key].lot_size = self.lot_size
@@ -264,16 +438,53 @@ class SimpleBacktester():
     def optimize(self, params: dict[str, range], constraint: Callable[[dict[str, Any]], bool] | None = None):
         """
         Perform a grid search over the provided parameter ranges.
-
-        params: dict mapping strategy attribute names to iterables of candidate values.
-        constraint: optional callable that takes the candidate parameter dict and returns True
-                    to evaluate the combo or False to skip it. For example:
-                        lambda p: p["fast_period"] < p["slow_period"]
-
+        
+        This method systematically tests all combinations of parameter values
+        to find the optimal configuration for the trading strategy. Each
+        parameter combination is backtested individually to evaluate performance.
+        
+        Args:
+            params (dict[str, range]): Dictionary mapping strategy attribute names
+                to iterables of candidate values. For example:
+                ```python
+                {
+                    'fast_period': range(5, 21, 5),    # [5, 10, 15, 20]
+                    'slow_period': range(20, 51, 10),  # [20, 30, 40, 50]
+                    'threshold': np.linspace(0.01, 0.1, 10)
+                }
+                ```
+            constraint (Callable[[dict[str, Any]], bool] | None, optional):
+                Optional callable that takes a candidate parameter dict and returns
+                True to evaluate the combo or False to skip it. Useful for enforcing
+                logical constraints like ensuring fast_period < slow_period.
+                Defaults to None (no constraints).
+                
         Returns:
-            best_params: dict[str, Any]
-            best_report: BacktestReport
-            results: pd.DataFrame with metrics per combination (only valid/kept combos)
+            tuple: A tuple containing (best_params, best_report, results):
+                - best_params (dict[str, Any]): Dictionary of parameter values
+                  that produced the best performance.
+                - best_report (BacktestReport): Complete backtest report for the
+                  best parameter combination.
+                - results (pd.DataFrame): DataFrame with metrics for all valid
+                  parameter combinations, sorted by performance.
+                  
+        Raises:
+            ValueError: If params is empty or contains parameters with no values.
+            TypeError: If any parameter values are not iterable.
+            
+        Note:
+            The optimization uses Sharpe ratio as the primary selection criterion.
+            If Sharpe ratio is invalid (NaN), it falls back to total return,
+            then to final cash amount.
+            
+        Example:
+            >>> bt = SimpleBacktester(strategy)  
+            >>> best_params, best_report, results = bt.optimize({  
+            ...     'fast_period': [5, 10, 20],  
+            ...     'slow_period': [20, 50, 100]  
+            ... }, constraint=lambda p: p['fast_period'] < p['slow_period'])  
+            >>> print(f"Best parameters: {best_params}")  
+            >>> print(f"Best Sharpe ratio: {best_report.periods_per_year}")  
         """
         if not params:
             raise ValueError("params must not be empty")
@@ -404,12 +615,58 @@ class SimpleBacktester():
              workers: int | None = None,
              chunksize: int = 1):
         """
-        Parallel grid search.
-
-        - workers: max number of worker processes to use (default: min(os.cpu_count()-1, 4))
-        - chunksize: passed to Executor.map -- tune when you have many small tasks.
-
-        Returns (best_params, best_report, results_df)
+        Perform parallel grid search over parameter ranges for optimization.
+        
+        This method is identical to optimize() but uses multiprocessing to
+        distribute parameter combinations across multiple worker processes,
+        significantly reducing computation time for large parameter spaces.
+        
+        Args:
+            params (dict[str, range]): Dictionary mapping strategy attribute names
+                to iterables of candidate values (same format as optimize()).
+            constraint (Callable[[dict[str, Any]], bool] | None, optional):
+                Optional callable for parameter constraints (same as optimize()).
+                Defaults to None.
+            workers (int | None, optional): Maximum number of worker processes to use.
+                If None, defaults to min(os.cpu_count()-1, 4) to avoid overwhelming
+                the system. Defaults to None.
+            chunksize (int, optional): Chunk size for ProcessPoolExecutor.map.
+                Smaller values provide better load balancing for many small tasks.
+                Larger values reduce overhead for fewer, larger tasks.
+                Defaults to 1.
+                
+        Returns:
+            tuple: Same return format as optimize():
+                (best_params, best_report, results_df)
+                
+        Raises:
+            ValueError: If params is empty or contains parameters with no values.
+            TypeError: If any parameter values are not iterable.
+            
+        Note:
+            - This method creates separate processes, so the strategy must be
+              picklable for multiprocessing to work.
+            - The main process re-runs the best configuration to get the full
+              BacktestReport (parallel workers only return summary metrics).
+            - Uses ProcessPoolExecutor for true parallelism across CPU cores.
+            - Memory usage scales with the number of workers as each worker
+              maintains a copy of the strategy.
+              
+        Performance Tips:
+            - For parameter spaces with many combinations (>1000), prefer
+              optimize_parallel over optimize for better performance.
+            - For small parameter spaces, optimize() may be faster due to
+              lower multiprocessing overhead.
+            - Monitor system memory usage as each worker maintains a full
+              copy of the strategy and data.
+              
+        Example:
+            >>> bt = SimpleBacktester(strategy)  
+            >>> # Use 4 workers for parallel optimization  
+            >>> best_params, best_report, results = bt.optimize_parallel(  
+            ...     {'period1': range(5, 50, 5), 'period2': range(20, 100, 10)},  
+            ...     workers=4  
+            ... )  
         """
         if not params:
             raise ValueError("params must not be empty")
