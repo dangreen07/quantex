@@ -153,6 +153,7 @@ class Broker:
         self._i = 0
         self.source = source
         self.PnLRecord = np.full(len(self.source.data['Close']), self.cash, dtype=np.float64)
+        self.cashRecord = []
 
     @final
     def buy(self, quantity: float = 1, limit: np.float64 | None = None, amount: np.float64 | None = None, stop_loss: np.float64 | None = None, take_profit: np.float64 | None = None):
@@ -506,6 +507,8 @@ class Broker:
         to_delete = []
         ## Do one loop to see if you can execute any orders
         for order in self.orders:
+            if self.position == 0:
+                self.cashRecord.append(self.cash)
             ## Check for new orders
             match order.status:
                 case OrderStatus.PENDING:

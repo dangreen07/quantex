@@ -4,7 +4,7 @@ from matplotlib import pyplot as plt
 import numpy as np
 import pandas as pd
 
-from .broker import Order
+from .broker import Order, OrderSide
 from .strategy import Strategy
 from .enums import CommissionType
 import copy
@@ -204,6 +204,11 @@ class BacktestReport:
     final_cash: np.float64
     PnlRecord: pd.Series
     orders: list[Order]
+    tradeRecord: list[np.float64]
+
+    @property
+    def annual_rf(self):
+        return 0.04
 
     @property
     def periods_per_year(self):
@@ -223,6 +228,26 @@ class BacktestReport:
         equity = self.PnlRecord.astype(float)
         tot_return = float(equity.iloc[-1] / equity.iloc[0] - 1.0)
         return tot_return
+    
+    @property
+    def kelly_criterion(self):
+        winning = 0
+        losing = 0
+        total_wins = 0
+        total_losses = 0
+        for trade in self.tradeRecord:
+            if trade > 0:
+                total_wins += abs(trade)
+                winning += 1
+            elif trade < 0:
+                total_losses += abs(trade)
+                losing += 1
+        W = winning / (winning + losing)
+        avg_win = total_wins / winning
+        avg_loss = total_losses / losing
+        R = avg_win / avg_loss
+        kelly = W - (1 - W) / R
+        return kelly
 
     def plot(self, figsize: tuple = (10, 5)) -> None:
         """
@@ -286,8 +311,7 @@ class BacktestReport:
         returns = equity.pct_change().dropna()
 
         # Risk-free per period from an annual rate
-        annual_rf = 0.04
-        rf_per_period = annual_rf / self.periods_per_year
+        rf_per_period = self.annual_rf / self.periods_per_year
 
         if len(returns) < 2 or returns.std(ddof=1) == 0:
             sharpe = np.nan
@@ -325,6 +349,7 @@ class BacktestReport:
             if np.isfinite(sharpe) else "\nSharpe Confidence Interval: [nan, nan]"
         ) + (
             f"\nMax Drawdown: {mdd:.2%}\n"
+            f"Kelly Fraction: {self.kelly_criterion:.3}\n"
             f"Total Trades: {tot_orders:,}"
         )
 
@@ -440,9 +465,13 @@ class SimpleBacktester():
                 item._i = min(i + 1, item.shape[0])
             self.strategy.next()
         orders: list[Order] = []
+        tradeRecord: list[np.float64] = []
         for val in self.strategy.positions.values():
             val.close()
             self.PnLRecord += val.PnLRecord
+            cashRecord = np.array(val.cashRecord)
+            trades = np.diff(cashRecord)
+            tradeRecord.extend(trades)
             orders.extend(val.complete_orders)
 
         index = list(self.strategy.positions.values())[0].source.data['Close'].index
@@ -450,7 +479,8 @@ class SimpleBacktester():
             starting_cash=np.float64(self.cash),
             final_cash=self.PnLRecord[-1],
             PnlRecord=pd.Series(self.PnLRecord, index=index),
-            orders=orders)
+            orders=orders,
+            tradeRecord=tradeRecord)
     
     def optimize(self, params: dict[str, range], constraint: Callable[[dict[str, Any]], bool] | None = None):
         """
