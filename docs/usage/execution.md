@@ -1,607 +1,322 @@
-# Execution Simulator Guide
+# Execution Guide
 
-This guide covers QuantEx's order execution system and broker simulation, which realistically models how trades are executed in live markets.
+This guide explains how orders work in Quantex and what the broker actually simulates.
 
-## Overview
+If you are new to the library, the most important thing to understand is that you do not place orders directly on the backtester. You place them on a symbol-specific [`Broker`](../../src/quantex/broker.py:113), usually from inside [`Strategy.next()`](../../src/quantex/strategy.py:71).
 
-QuantEx's execution simulator provides realistic order processing including:
+## Where brokers come from
 
-- **Order Types**: Market orders, limit orders, stop losses, take profits
-- **Order States**: Pending, active, and completed orders
-- **Position Tracking**: Real-time position and PnL calculation
-- **Commission Handling**: Realistic transaction cost modeling
-- **Risk Management**: Automatic stop loss and take profit execution
+When you call [`Strategy.add_data()`](../../src/quantex/strategy.py:98), Quantex does two things:
 
-## Basic Order Execution
+1. stores the data source in [`Strategy.data`](../../src/quantex/strategy.py:48)
+2. creates a matching [`Broker`](../../src/quantex/broker.py:113) in [`Strategy.positions`](../../src/quantex/strategy.py:47)
 
-### Market Orders
+That means this call:
+
+```python
+self.add_data(CSVDataSource("eurusd.csv"), "EURUSD")
+```
+
+gives you a broker at:
+
+```python
+self.positions["EURUSD"]
+```
+
+## The public execution methods
+
+The broker methods intended for normal strategy code are:
+
+- [`Broker.buy()`](../../src/quantex/broker.py:159)
+- [`Broker.sell()`](../../src/quantex/broker.py:235)
+- [`Broker.close()`](../../src/quantex/broker.py:307)
+- [`Broker.is_long()`](../../src/quantex/broker.py:359)
+- [`Broker.is_short()`](../../src/quantex/broker.py:373)
+- [`Broker.is_closed()`](../../src/quantex/broker.py:387)
+
+## Basic market orders
+
+### Buying
 
 ```python
 def next(self):
-    # Market buy order
-    self.positions['EURUSD'].buy(0.5)  # Buy with 50% of available cash
-
-    # Market sell order
-    self.positions['EURUSD'].sell(0.3)  # Sell 30% of current position
-
-    # Close entire position
-    self.positions['EURUSD'].close()
+    broker = self.positions["EURUSD"]
+    broker.buy(quantity=0.5)
 ```
 
-### Order Parameters
+In the current implementation of [`Broker.buy()`](../../src/quantex/broker.py:159), `quantity=0.5` means “use roughly 50% of the broker cash for this symbol”, unless you pass `amount`.
 
-```python
-# Buy with specific dollar amount
-self.positions['EURUSD'].buy(amount=1000)  # Buy $1000 worth
-
-# Sell specific quantity
-self.positions['EURUSD'].sell(amount=10000)  # Sell 10,000 units
-
-# Percentage-based sizing
-self.positions['EURUSD'].buy(0.25)  # Use 25% of available cash
-```
-
-## Advanced Order Types
-
-### Limit Orders
+### Selling
 
 ```python
 def next(self):
-    current_price = self.data['EURUSD'].CClose
-
-    # Buy limit order - only execute if price drops to target
-    target_buy_price = current_price * 0.995  # 0.5% below current price
-    self.positions['EURUSD'].buy(0.5, limit=target_buy_price)
-
-    # Sell limit order - only execute if price rises to target
-    target_sell_price = current_price * 1.01  # 1% above current price
-    self.positions['EURUSD'].sell(0.3, limit=target_sell_price)
+    broker = self.positions["EURUSD"]
+    broker.sell(quantity=0.25)
 ```
 
-### Stop Loss Orders
+[`Broker.sell()`](../../src/quantex/broker.py:235) can reduce an existing long position or create/increase a short position.
+
+### Closing
 
 ```python
 def next(self):
-    # Buy with stop loss
-    entry_price = self.data['EURUSD'].CClose
-    stop_loss_price = entry_price * 0.98  # 2% stop loss
+    broker = self.positions["EURUSD"]
 
-    self.positions['EURUSD'].buy(0.5, stop_loss=stop_loss_price)
-
-    # Sell with stop loss (for short positions)
-    self.positions['EURUSD'].sell(0.3, stop_loss=entry_price * 1.02)
+    if broker.is_long():
+        broker.close()
 ```
 
-### Take Profit Orders
+[`Broker.close()`](../../src/quantex/broker.py:307) submits an offsetting market order for the current position.
+
+## Order sizing rules
+
+This is one of the most important practical details in Quantex.
+
+### Fractional sizing through `quantity`
+
+In both [`Broker.buy()`](../../src/quantex/broker.py:159) and [`Broker.sell()`](../../src/quantex/broker.py:235), the `quantity` argument must be greater than 0 and less than or equal to 1.
+
+That validation is enforced in both methods.
+
+For buys, share count is calculated from available broker cash and current visible price.
+
+Example:
+
+```python
+broker.buy(quantity=0.25)
+```
+
+means “allocate about 25% of broker cash to a buy order”.
+
+### Explicit sizing through `amount`
+
+If you pass `amount`, it overrides the automatic quantity calculation.
+
+```python
+broker.buy(amount=100)
+broker.sell(amount=50)
+```
+
+Important correction: in the current code, `amount` is treated as the number of units or shares, not a cash amount. Some older documentation described `amount` as currency-based sizing, which is inaccurate for the current implementation.
+
+## Order types
+
+The order type enum is [`OrderType`](../../src/quantex/broker.py:24).
+
+Current supported types:
+
+- [`OrderType.MARKET`](../../src/quantex/broker.py:34)
+- [`OrderType.LIMIT`](../../src/quantex/broker.py:35)
+
+### Market orders
+
+If you do not pass a `limit`, the broker creates a market order.
+
+```python
+broker.buy(quantity=0.5)
+broker.sell(quantity=0.5)
+```
+
+Market orders are processed in [`Broker._iterate()`](../../src/quantex/broker.py:483) and execute using [`DataSource.COpen`](../../src/quantex/datasource.py:145).
+
+That means the fill logic is based on the current bar's open price, not the close.
+
+### Limit orders
+
+If you pass `limit`, the broker creates a limit order.
+
+```python
+broker.buy(quantity=0.5, limit=99.5)
+broker.sell(quantity=0.5, limit=105.0)
+```
+
+In the current implementation:
+
+- a buy limit executes when [`DataSource.COpen`](../../src/quantex/datasource.py:145) is less than or equal to the limit price
+- a sell limit executes when [`DataSource.COpen`](../../src/quantex/datasource.py:145) is greater than or equal to the limit price
+
+## Stop loss and take profit behavior
+
+Both [`Broker.buy()`](../../src/quantex/broker.py:159) and [`Broker.sell()`](../../src/quantex/broker.py:235) accept:
+
+- `stop_loss`
+- `take_profit`
+
+Example:
+
+```python
+broker.buy(
+    quantity=0.25,
+    stop_loss=95.0,
+    take_profit=110.0,
+)
+```
+
+When an order with stop-loss or take-profit levels becomes active, the broker keeps monitoring it in [`Broker._iterate()`](../../src/quantex/broker.py:589).
+
+Important implementation detail:
+
+- stop-loss and take-profit checks are also based on [`DataSource.COpen`](../../src/quantex/datasource.py:145)
+- when the condition is met, the broker creates a new market order in the opposite direction
+
+## Order lifecycle
+
+Order state is represented by [`OrderStatus`](../../src/quantex/broker.py:37).
+
+The three states are:
+
+- [`OrderStatus.PENDING`](../../src/quantex/broker.py:50)
+- [`OrderStatus.ACTIVE`](../../src/quantex/broker.py:48)
+- [`OrderStatus.COMPLETE`](../../src/quantex/broker.py:49)
+
+### What they mean in practice
+
+- `PENDING`: order exists but has not been fully processed yet
+- `ACTIVE`: order has executed and still has stop-loss or take-profit monitoring attached
+- `COMPLETE`: order no longer has further actions to manage
+
+You can inspect pending orders through [`Broker.orders`](../../src/quantex/broker.py:151) and completed ones through [`Broker.complete_orders`](../../src/quantex/broker.py:152).
+
+Example:
 
 ```python
 def next(self):
-    # Buy with take profit
-    entry_price = self.data['EURUSD'].CClose
-    take_profit_price = entry_price * 1.03  # 3% profit target
+    broker = self.positions["EURUSD"]
 
-    self.positions['EURUSD'].buy(0.5, take_profit=take_profit_price)
+    print("pending", len(broker.orders))
+    print("completed", len(broker.complete_orders))
 
-    # Multiple targets
-    self.positions['EURUSD'].sell(0.3, take_profit=take_profit_price)
+    for order in broker.orders:
+        print(order.side, order.type, order.status)
 ```
 
-## Order States and Lifecycle
+## Position state
 
-### Understanding Order States
+Useful broker fields include:
 
-Orders in QuantEx can have three states:
+- [`Broker.position`](../../src/quantex/broker.py:143)
+- [`Broker.position_avg_price`](../../src/quantex/broker.py:144)
+- [`Broker.cash`](../../src/quantex/broker.py:145)
 
-- **PENDING**: Order created but not yet executed
-- **ACTIVE**: Order executed but has stop loss/take profit conditions
-- **COMPLETE**: Order fully executed with no remaining conditions
+Example:
 
 ```python
 def next(self):
-    # Check order states
-    orders = self.positions['EURUSD'].orders
+    broker = self.positions["EURUSD"]
 
-    for order in orders:
-        print(f"Order {order.side.name}: {order.status.name}")
-
-        if order.status == OrderStatus.PENDING:
-            print(f"  - Waiting for execution at {order.price}")
-        elif order.status == OrderStatus.ACTIVE:
-            print(f"  - Position open with SL/TP conditions")
-        elif order.status == OrderStatus.COMPLETE:
-            print(f"  - Order completed")
+    print("position", broker.position)
+    print("avg entry", broker.position_avg_price)
+    print("cash", broker.cash)
 ```
 
-### Order Management
-
-```python
-class OrderManager:
-    def __init__(self, strategy):
-        self.strategy = strategy
-
-    def get_pending_orders(self, symbol):
-        """Get all pending orders for a symbol"""
-        return [order for order in self.strategy.positions[symbol].orders
-                if order.status == OrderStatus.PENDING]
-
-    def get_active_orders(self, symbol):
-        """Get all active orders for a symbol"""
-        return [order for order in self.strategy.positions[symbol].orders
-                if order.status == OrderStatus.ACTIVE]
-
-    def cancel_order(self, symbol, order_id):
-        """Cancel a specific order"""
-        # Note: QuantEx doesn't currently support order cancellation
-        # This is for illustration of the concept
-        pass
-```
-
-## Position Management
-
-### Position Information
+If you want a simple unrealized value estimate, use the current close:
 
 ```python
 def next(self):
-    position = self.positions['EURUSD']
-
-    # Basic position info
-    print(f"Current Position: {position.position}")
-    print(f"Position Value: {position.position * self.data['EURUSD'].CClose}")
-    print(f"Available Cash: ${position.cash:,.2f}")
-
-    # Position status
-    if position.is_long():
-        print("Currently LONG")
-    elif position.is_short():
-        print("Currently SHORT")
-    else:
-        print("Currently FLAT")
-
-    # Average entry price
-    if position.position != 0:
-        print(f"Average Entry Price: {position.position_avg_price}")
+    broker = self.positions["EURUSD"]
+    current_price = self.data["EURUSD"].CClose
+    unrealized_value = broker.position * current_price
+    print(unrealized_value)
 ```
 
-### Unrealized PnL
+Important correction: the current [`Broker`](../../src/quantex/broker.py:113) class does **not** expose a public `unrealized_pnl` property. Older docs referenced one, but it is not in the current implementation.
 
-```python
-def calculate_unrealized_pnl(self):
-    """Calculate unrealized profit/loss"""
+## Commission handling
 
-    position = self.positions['EURUSD']
-    current_price = self.data['EURUSD'].CClose
+Commission logic is controlled by [`CommissionType`](../../src/quantex/enums.py:4) and implemented in [`Broker._calc_commission()`](../../src/quantex/broker.py:440).
 
-    if position.is_closed():
-        return 0.0
+### Percentage commission
 
-    # Calculate PnL based on position and current price
-    entry_value = position.position * position.position_avg_price
-    current_value = position.position * current_price
+With [`CommissionType.PERCENTAGE`](../../src/quantex/enums.py:17), commission is:
 
-    return current_value - entry_value
-
-def next(self):
-    unrealized_pnl = self.calculate_unrealized_pnl()
-    print(f"Unrealized PnL: ${unrealized_pnl:.2f}")
+```text
+quantity * price * commission
 ```
 
-## Risk Management
+### Cash commission
 
-### Automatic Stop Losses
+With [`CommissionType.CASH`](../../src/quantex/enums.py:18), commission is:
 
-```python
-class RiskManagedStrategy(Strategy):
-    def init(self):
-        data = CSVDataSource('data/EURUSD.csv')
-        self.add_data(data, 'EURUSD')
-
-        # Risk management parameters
-        self.max_position_size = 0.1  # Max 10% of capital per trade
-        self.stop_loss_pct = 0.02     # 2% stop loss
-        self.take_profit_pct = 0.04   # 4% take profit
-
-    def next(self):
-        if self.should_enter_trade():
-            current_price = self.data['EURUSD'].CClose
-
-            # Calculate stop loss and take profit levels
-            stop_loss = current_price * (1 - self.stop_loss_pct)
-            take_profit = current_price * (1 + self.take_profit_pct)
-
-            # Enter position with risk management
-            self.positions['EURUSD'].buy(
-                self.max_position_size,
-                stop_loss=stop_loss,
-                take_profit=take_profit
-            )
+```text
+quantity * commission / lot_size
 ```
 
-## Commission and Fees
+## Margin-call behavior
 
-### Commission Calculation
+The broker stores a margin threshold in [`Broker.margin_call`](../../src/quantex/broker.py:149). During [`Broker._iterate()`](../../src/quantex/broker.py:633), if equity falls below the calculated margin threshold while the position is short, the broker calls [`Broker.close()`](../../src/quantex/broker.py:307).
 
-```python
-# Percentage-based commission (default)
-position = self.positions['EURUSD']
-commission_rate = 0.002  # 0.2%
+This is a limited form of margin handling, not a full brokerage margin model.
 
-# Commission is calculated as: quantity * price * commission_rate
-trade_value = quantity * price
-commission = trade_value * commission_rate
-
-# Fixed cash commission
-fixed_commission = 1.00  # $1 per trade
-```
-
-### Commission Impact Analysis
+## A realistic example
 
 ```python
-def analyze_commission_impact(self, report):
-    """Analyze how commissions affect performance"""
+from quantex import Strategy, CSVDataSource
 
-    total_trades = len(report.orders)
-    total_commission = 0
 
-    for order in report.orders:
-        if order.status == OrderStatus.COMPLETE:
-            # Calculate commission for this order
-            commission = self.calculate_commission(order)
-            total_commission += commission
-
-    print(f"Total Trades: {total_trades}")
-    print(f"Total Commissions: ${total_commission:.2f}")
-    print(f"Average Commission per Trade: ${total_commission/total_trades:.2f}")
-    print(f"Commission as % of Final Capital: {total_commission/report.final_cash:.2%}")
-
-    return total_commission
-```
-
-## Order Execution Examples
-
-### Simple Buy and Hold
-
-```python
-class BuyAndHoldStrategy(Strategy):
-    def init(self):
-        data = CSVDataSource('data/EURUSD.csv')
-        self.add_data(data, 'EURUSD')
+class BreakoutStrategy(Strategy):
+    def __init__(self):
+        super().__init__()
         self.entered = False
 
+    def init(self):
+        self.add_data(CSVDataSource("data.csv"), "TEST")
+
     def next(self):
-        # Buy on first day and hold
-        if not self.entered and len(self.data['EURUSD'].Close) > 1:
-            self.positions['EURUSD'].buy()  # Use all available cash
+        broker = self.positions["TEST"]
+        current_open = self.data["TEST"].COpen
+
+        if not self.entered:
+            broker.buy(
+                quantity=0.25,
+                stop_loss=current_open * 0.98,
+                take_profit=current_open * 1.04,
+            )
             self.entered = True
+
+        if broker.is_long() and self.data["TEST"].CClose < current_open:
+            broker.close()
 ```
 
-### Mean Reversion Strategy
+## Things the current execution engine does not do
+
+The current codebase does **not** include:
+
+- slippage modeling
+- partial fills
+- public order cancellation
+- separate bid/ask prices
+- advanced order types such as stop-limit orders
+
+Some earlier documentation discussed these ideas conceptually, but they are not current built-in features.
+
+## Debugging order behavior
+
+One good way to debug is to print current market state, broker state, and queued orders from inside [`Strategy.next()`](../../src/quantex/strategy.py:71).
 
 ```python
-class MeanReversionStrategy(Strategy):
-    def init(self):
-        data = CSVDataSource('data/EURUSD.csv')
-        self.add_data(data, 'EURUSD')
+def next(self):
+    broker = self.positions["EURUSD"]
+    source = self.data["EURUSD"]
 
-        # Calculate moving average and standard deviation
-        close_prices = self.data['EURUSD'].Close
-        self.mean = self.Indicator(self.calculate_sma(close_prices, 20))
-        self.std = self.Indicator(self.calculate_std(close_prices, 20))
+    print(source.Index[source.current_index])
+    print("open", source.COpen, "close", source.CClose)
+    print("position", broker.position, "cash", broker.cash)
 
-    def next(self):
-        if len(self.mean) < 2:
-            return
-
-        current_price = self.data['EURUSD'].CClose
-        z_score = (current_price - self.mean[-1]) / self.std[-1]
-
-        # Buy when price is significantly below mean
-        if z_score < -2.0 and (self.positions['EURUSD'].is_short() or self.positions['EURUSD'].is_closed()):
-            self.positions['EURUSD'].buy(0.5)
-
-        # Sell when price is significantly above mean
-        elif z_score > 2.0 and (self.positions['EURUSD'].is_long() or self.positions['EURUSD'].is_closed()):
-            self.positions['EURUSD'].sell(0.5)
-
-    def calculate_sma(self, prices, period):
-        return pd.Series(prices).rolling(window=period).mean().values
-
-    def calculate_std(self, prices, period):
-        return pd.Series(prices).rolling(window=period).std().values
+    for order in broker.orders:
+        print(order.side, order.type, order.status, order.price)
 ```
 
-### Breakout Strategy
+See [`tests/test_broker.py`](../../tests/test_broker.py) for the behavior currently asserted by the test suite.
 
-```python
-class BreakoutStrategy(Strategy):
-    def init(self):
-        data = CSVDataSource('data/EURUSD.csv')
-        self.add_data(data, 'EURUSD')
+## Summary
 
-        # Track recent high/low
-        self.lookback = 20
-        self.highest_high = self.Indicator(self.calculate_highest_high(self.data['EURUSD'].High, self.lookback))
-        self.lowest_low = self.Indicator(self.calculate_lowest_low(self.data['EURUSD'].Low, self.lookback))
+Use the broker in [`Strategy.positions`](../../src/quantex/strategy.py:47) to place orders.
 
-    def next(self):
-        if len(self.highest_high) < 1:
-            return
+Remember these three rules:
 
-        current_price = self.data['EURUSD'].CClose
+1. market orders execute from current open logic, not close logic
+2. `quantity` is fractional sizing, while `amount` is unit count
+3. the broker API is intentionally small and does not model every market microstructure detail
 
-        # Bullish breakout
-        if (current_price > self.highest_high[-1] and
-            self.positions['EURUSD'].position <= 0):
-            self.positions['EURUSD'].buy(0.5)
+For portfolio results and reports, see [Backtesting guide](./backtesting.md).
 
-        # Bearish breakout
-        elif (current_price < self.lowest_low[-1] and
-              self.positions['EURUSD'].position >= 0):
-            self.positions['EURUSD'].sell(0.5)
-
-    def calculate_highest_high(self, highs, period):
-        return pd.Series(highs).rolling(window=period).max().values
-
-    def calculate_lowest_low(self, lows, period):
-        return pd.Series(lows).rolling(window=period).min().values
-```
-
-## Execution Quality Analysis
-
-### Slippage Modeling
-
-```python
-# QuantEx doesn't currently model slippage, but here's how you could implement it
-class SlippageAwareBroker(Broker):
-    def __init__(self, *args, slippage_pct=0.001, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.slippage_pct = slippage_pct
-
-    def execute_market_order(self, order):
-        """Execute market order with slippage"""
-
-        base_price = self.source.CClose
-
-        # Add random slippage (simplified model)
-        slippage = base_price * self.slippage_pct * (2 * random.random() - 1)
-        execution_price = base_price + slippage
-
-        # Execute order at slippage-adjusted price
-        return self._execute_order_at_price(order, execution_price)
-```
-
-### Fill Rate Analysis
-
-```python
-def analyze_fill_rates(self, report):
-    """Analyze order fill rates and execution quality"""
-
-    total_orders = len(report.orders)
-    filled_orders = len([o for o in report.orders if o.status == OrderStatus.COMPLETE])
-
-    print(f"Total Orders: {total_orders}")
-    print(f"Filled Orders: {filled_orders}")
-    print(f"Fill Rate: {filled_orders/total_orders:.2%}")
-
-    # Analyze fill rates by order type
-    market_orders = [o for o in report.orders if o.type == OrderType.MARKET]
-    limit_orders = [o for o in report.orders if o.type == OrderType.LIMIT]
-
-    market_fills = len([o for o in market_orders if o.status == OrderStatus.COMPLETE])
-    limit_fills = len([o for o in limit_orders if o.status == OrderStatus.COMPLETE])
-
-    print(f"Market Order Fill Rate: {market_fills/len(market_orders):.2%}")
-    print(f"Limit Order Fill Rate: {limit_fills/len(limit_orders):.2%}")
-```
-
-## Portfolio-Level Execution
-
-### Multi-Symbol Execution
-
-```python
-class MultiSymbolStrategy(Strategy):
-    def init(self):
-        symbols = ['EURUSD', 'GBPUSD', 'USDJPY']
-
-        for symbol in symbols:
-            data = CSVDataSource(f'data/{symbol}.csv')
-            self.add_data(data, symbol)
-
-    def next(self):
-        # Allocate capital across symbols
-        total_allocation = 0.9  # Use 90% of capital
-        allocation_per_symbol = total_allocation / 3  # Equal allocation
-
-        for symbol in ['EURUSD', 'GBPUSD', 'USDJPY']:
-            if self.should_trade(symbol):
-                # Check if we have enough cash for this allocation
-                required_cash = self.positions[symbol].cash * allocation_per_symbol
-
-                if required_cash > 100:  # Minimum trade size
-                    self.positions[symbol].buy(allocation_per_symbol)
-```
-
-### Position Sizing
-
-```python
-class PositionSizingStrategy(Strategy):
-    def init(self):
-        data = CSVDataSource('data/EURUSD.csv')
-        self.add_data(data, 'EURUSD')
-
-        # Position sizing parameters
-        self.base_position_size = 0.1  # Base 10% position
-        self.volatility_adjustment = True
-        self.max_position = 0.5  # Maximum 50% position
-
-    def calculate_position_size(self):
-        """Calculate dynamic position size based on volatility"""
-
-        if not self.volatility_adjustment:
-            return self.base_position_size
-
-        # Calculate recent volatility
-        recent_returns = pd.Series(self.data['EURUSD'].Close).pct_change()
-        volatility = recent_returns.tail(20).std()
-
-        # Adjust position size inversely to volatility
-        # Lower volatility = larger position, higher volatility = smaller position
-        volatility_adjusted_size = self.base_position_size / (1 + volatility * 10)
-
-        return min(volatility_adjusted_size, self.max_position)
-
-    def next(self):
-        if self.should_trade():
-            position_size = self.calculate_position_size()
-            self.positions['EURUSD'].buy(position_size)
-```
-
-## Execution Debugging
-
-### Order Tracing
-
-```python
-class TraceableStrategy(Strategy):
-    def init(self):
-        data = CSVDataSource('data/EURUSD.csv')
-        self.add_data(data, 'EURUSD')
-        self.execution_log = []
-
-    def next(self):
-        # Log before execution
-        current_price = self.data['EURUSD'].CClose
-        current_position = self.positions['EURUSD'].position
-
-        self.execution_log.append({
-            'timestamp': self.data['EURUSD'].Index[self.data['EURUSD'].current_index],
-            'price': current_price,
-            'position_before': current_position,
-            'cash_before': self.positions['EURUSD'].cash
-        })
-
-        # Execute trading logic
-        if self.buy_signal():
-            self.positions['EURUSD'].buy(0.5)
-
-        # Log after execution
-        self.execution_log[-1].update({
-            'position_after': self.positions['EURUSD'].position,
-            'cash_after': self.positions['EURUSD'].cash,
-            'orders': len(self.positions['EURUSD'].orders)
-        })
-
-    def print_execution_log(self):
-        """Print detailed execution trace"""
-        for log_entry in self.execution_log[-10:]:  # Last 10 entries
-            print(f"{log_entry['timestamp']}: "
-                  f"Price={log_entry['price']:.5f}, "
-                  f"Pos={log_entry['position_before']:>.2f}->{log_entry['position_after']:.2f}")
-```
-
-### Performance Attribution
-
-```python
-def analyze_execution_impact(self, report):
-    """Analyze how execution affects strategy performance"""
-
-    # Compare entry prices vs. ideal prices
-    entry_analysis = []
-
-    for order in report.orders:
-        if order.side == OrderSide.BUY and order.status == OrderStatus.COMPLETE:
-            # Compare execution price vs. price at order placement
-            execution_price = order.price or self.get_price_at_time(order.timestamp)
-
-            entry_analysis.append({
-                'timestamp': order.timestamp,
-                'execution_price': execution_price,
-                'slippage': execution_price - self.get_price_at_time(order.timestamp)
-            })
-
-    # Calculate average slippage
-    avg_slippage = sum(entry['slippage'] for entry in entry_analysis) / len(entry_analysis)
-
-    print(f"Average Slippage: {avg_slippage:.6f}")
-    print(f"Slippage Impact on Returns: {avg_slippage * len(entry_analysis) / report.final_cash:.2%}")
-
-    return entry_analysis
-```
-
-## Best Practices
-
-### 1. Order Management
-
-```python
-# Proper order lifecycle management
-def manage_orders(self):
-    """Best practices for order management"""
-
-    # 1. Check for execution before placing new orders
-    if len(self.positions['EURUSD'].orders) > 5:
-        return  # Too many pending orders
-
-    # 2. Validate order parameters
-    current_price = self.data['EURUSD'].CClose
-    if self.buy_limit_price <= current_price * 0.9:  # Price too far
-        return
-
-    # 3. Monitor order status
-    for order in self.positions['EURUSD'].orders:
-        if order.status == OrderStatus.PENDING:
-            # Check if order should be cancelled/modified
-            pass
-```
-
-### 2. Risk Controls
-
-```python
-def implement_risk_controls(self):
-    """Implement proper risk management"""
-
-    position = self.positions['EURUSD']
-
-    # Maximum position size check
-    max_position_value = position.cash * 2.0  # Max 2x leverage
-    current_position_value = abs(position.position) * self.data['EURUSD'].CClose
-
-    if current_position_value > max_position_value:
-        # Reduce position
-        self.positions['EURUSD'].close()
-
-    # Maximum drawdown check
-    if self.calculate_drawdown() > 0.15:  # 15% drawdown limit
-        # Close all positions
-        for symbol in self.positions:
-            self.positions[symbol].close()
-```
-
-### 3. Execution Quality
-
-```python
-def ensure_execution_quality(self):
-    """Ensure high-quality execution"""
-
-    # 1. Use appropriate order sizes
-    min_order_size = 100  # Minimum meaningful order
-    if self.calculate_order_size() < min_order_size:
-        return
-
-    # 2. Consider market conditions
-    if self.is_market_volatile():
-        # Use smaller orders or wait for calmer conditions
-        self.positions['EURUSD'].buy(0.2)  # Smaller size
-    else:
-        self.positions['EURUSD'].buy(0.5)  # Normal size
-
-    # 3. Monitor execution performance
-    self.track_execution_metrics()
-```
-
-## Next Steps
-
-Now that you understand execution simulation in QuantEx, explore these related topics:
-
-- **[Strategy Guide](./strategy.md)**: Learn how to integrate execution into your strategies
-- **[Backtesting Guide](./backtesting.md)**: Understand how execution affects backtest results
-- **[Broker API Reference](../../reference/quantex.execution.md)**: Complete broker and execution API
-
-For complete API reference, see the [Execution API documentation](../../reference/quantex.execution.md).

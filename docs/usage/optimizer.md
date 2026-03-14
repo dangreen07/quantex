@@ -1,706 +1,302 @@
-# Parameter Optimization Guide
+# Optimization Guide
 
-This guide covers how to use QuantEx's parameter optimization features to find the best strategy parameters.
+This guide explains the optimization features that Quantex currently provides.
 
-## Overview
+The current implementation supports grid search over parameter combinations through:
 
-QuantEx provides powerful optimization capabilities:
+- [`SimpleBacktester.optimize()`](../../src/quantex/backtester.py:485)
+- [`SimpleBacktester.optimize_parallel()`](../../src/quantex/backtester.py:659)
 
-- **Grid Search**: Test all combinations of parameter values
-- **Parallel Processing**: Use multiple CPU cores for faster optimization
-- **Constraint Support**: Apply business logic constraints to parameter combinations
-- **Memory Efficient**: Optimized for large parameter spaces
-- **Comprehensive Results**: Detailed analysis of optimization results
+This guide focuses on what those methods actually do in the current codebase.
 
-## Basic Parameter Optimization
+## What optimization means in Quantex
 
-### Simple Grid Search
+Optimization in Quantex means:
+
+1. choose one or more strategy attributes to vary
+2. provide candidate values for each attribute
+3. run a separate backtest for each valid combination
+4. compare the resulting metrics
+
+The optimizer does not do Bayesian optimization, evolutionary search, or walk-forward validation automatically. It performs exhaustive grid search.
+
+## Basic example
 
 ```python
-# Define parameter ranges to test
-param_ranges = {
-    'fast_period': range(5, 21, 2),    # 5, 7, 9, ..., 19
-    'slow_period': range(20, 51, 5),   # 20, 25, 30, ..., 50
-    'position_size': [0.1, 0.2, 0.3, 0.4, 0.5]
+from quantex import Strategy, CSVDataSource, SimpleBacktester
+import pandas as pd
+
+
+class MovingAverageCross(Strategy):
+    def __init__(self, fast_period=5, slow_period=20):
+        super().__init__()
+        self.fast_period = fast_period
+        self.slow_period = slow_period
+
+    def init(self):
+        self.add_data(CSVDataSource("data.csv"), "TEST")
+        close = self.data["TEST"].Close
+
+        self.fast_ma = self.Indicator(
+            pd.Series(close).rolling(window=self.fast_period).mean().to_numpy()
+        )
+        self.slow_ma = self.Indicator(
+            pd.Series(close).rolling(window=self.slow_period).mean().to_numpy()
+        )
+
+    def next(self):
+        if len(self.fast_ma) < 2 or len(self.slow_ma) < 2:
+            return
+
+        broker = self.positions["TEST"]
+
+        crossed_up = self.fast_ma[-2] <= self.slow_ma[-2] and self.fast_ma[-1] > self.slow_ma[-1]
+        crossed_down = self.fast_ma[-2] >= self.slow_ma[-2] and self.fast_ma[-1] < self.slow_ma[-1]
+
+        if crossed_up and broker.is_closed():
+            broker.buy(quantity=1.0)
+        elif crossed_down and broker.is_long():
+            broker.close()
+
+
+strategy = MovingAverageCross()
+backtester = SimpleBacktester(strategy, cash=10_000)
+
+params = {
+    "fast_period": range(5, 11),
+    "slow_period": range(15, 31, 5),
 }
 
-# Run optimization
 best_params, best_report, results_df = backtester.optimize(
-    params=param_ranges
+    params,
+    constraint=lambda p: p["fast_period"] < p["slow_period"],
 )
 
-print(f"Best Parameters: {best_params}")
-print(f"Best Sharpe Ratio: {best_report.sharpe:.2f}")
-print(f"Total Combinations Tested: {len(results_df)}")
-```
-
-### Understanding Optimization Results
-
-```python
-# Analyze optimization results
-print("Top 5 parameter combinations:")
+print(best_params)
+print(best_report)
 print(results_df.head())
-
-# Summary statistics
-print(f"\nBest Sharpe: {results_df['sharpe'].max():.2f}")
-print(f"Worst Sharpe: {results_df['sharpe'].min():.2f}")
-print(f"Mean Sharpe: {results_df['sharpe'].mean():.2f}")
-print(f"Std Sharpe: {results_df['sharpe'].std():.2f}")
-
-# Distribution of results
-print(f"\nPositive Sharpe combinations: {len(results_df[results_df['sharpe'] > 0])}")
-print(f"Negative Sharpe combinations: {len(results_df[results_df['sharpe'] < 0])}")
 ```
 
-## Advanced Optimization Features
+## Parameter format
 
-### Parameter Constraints
+Both optimization methods expect a dictionary whose keys are strategy attribute names and whose values are iterables.
 
-```python
-# Define logical constraints between parameters
-def optimization_constraints(params):
-    """Apply business logic constraints"""
-
-    # Fast period should be less than slow period
-    if params['fast_period'] >= params['slow_period']:
-        return False
-
-    # Position size should be reasonable
-    if not (0.01 <= params['position_size'] <= 1.0):
-        return False
-
-    # Custom logic constraints
-    if params['fast_period'] * 2 > params['slow_period']:
-        return False
-
-    return True
-
-# Run constrained optimization
-best_params, best_report, results_df = backtester.optimize(
-    params=param_ranges,
-    constraint=optimization_constraints
-)
-```
-
-### Custom Parameter Types
+Example:
 
 ```python
-# Use different parameter types
-advanced_param_ranges = {
-    'fast_period': range(5, 21, 2),                    # Integer range
-    'slow_period': [20, 25, 30, 35, 40, 45, 50],      # Specific values
-    'position_size': np.linspace(0.1, 0.5, 9),        # Float range
-    'stop_loss': np.logspace(-0.02, -0.001, 10),       # Log-spaced values
-    'rsi_period': [7, 10, 14, 21, 28],                # Fibonacci-like
-    'bb_std': [1.5, 1.8, 2.0, 2.2, 2.5]              # Standard deviations
+params = {
+    "fast_period": [5, 10, 15],
+    "slow_period": range(20, 41, 10),
+    "position_size": [0.1, 0.2, 0.3],
 }
-
-# Generate parameter combinations manually for complex cases
-import itertools
-
-def generate_custom_combinations():
-    """Generate custom parameter combinations"""
-
-    combinations = []
-
-    for fast in range(5, 21, 2):
-        for slow in [20, 25, 30, 35, 40, 45, 50]:
-            if fast < slow:  # Apply constraint
-                for pos_size in np.linspace(0.1, 0.5, 5):
-                    for stop_loss in [-0.01, -0.02, -0.03]:
-                        combinations.append({
-                            'fast_period': fast,
-                            'slow_period': slow,
-                            'position_size': pos_size,
-                            'stop_loss': stop_loss
-                        })
-
-    return combinations
 ```
 
-## Parallel Optimization
+The optimizer applies those values using `setattr` in [`SimpleBacktester.optimize()`](../../src/quantex/backtester.py:574) and [`_worker_eval()`](../../src/quantex/backtester.py:138).
 
-### Multi-Core Optimization
+That means the named attributes must already make sense for your strategy design.
+
+## Constraints
+
+Both optimizers accept an optional `constraint` callable.
+
+Example:
 
 ```python
-# Use all available CPU cores
-import os
+def valid_combo(params):
+    return params["fast_period"] < params["slow_period"]
 
-best_params, best_report, results_df = backtester.optimize_parallel(
-    params=param_ranges,
-    workers=os.cpu_count(),  # Use all cores
-    chunksize=5              # Process 5 combinations per chunk
-)
 
-# Conservative worker allocation
-cpu_count = os.cpu_count() or 1
-safe_workers = max(1, cpu_count - 1)  # Leave one core free
-
-best_params, best_report, results_df = backtester.optimize_parallel(
-    params=param_ranges,
-    workers=safe_workers,
-    chunksize=10
+best_params, best_report, results_df = backtester.optimize(
+    params,
+    constraint=valid_combo,
 )
 ```
 
-### Memory Management for Large Optimizations
+The constraint is checked before each combination is evaluated in [`SimpleBacktester.optimize()`](../../src/quantex/backtester.py:563) and [`SimpleBacktester.optimize_parallel()`](../../src/quantex/backtester.py:744).
+
+## Sequential optimization
+
+[`SimpleBacktester.optimize()`](../../src/quantex/backtester.py:485) evaluates combinations one after another in the current process.
+
+Use it when:
+
+- the parameter grid is modest in size
+- debugging is more important than raw speed
+- multiprocessing overhead would be unnecessary
+
+### Validation behavior
+
+The method raises:
+
+- `ValueError` for an empty parameter dictionary
+- `ValueError` when any parameter has no candidate values
+- `TypeError` when a parameter value is not iterable
+
+These behaviors are tested in [`tests/test_backtester.py`](../../tests/test_backtester.py).
+
+## Parallel optimization
+
+[`SimpleBacktester.optimize_parallel()`](../../src/quantex/backtester.py:659) uses multiple worker processes through `ProcessPoolExecutor`.
+
+Example:
 
 ```python
-# For very large parameter spaces, manage memory
-class MemoryEfficientOptimizer:
-    def __init__(self, backtester, max_memory_gb=4):
-        self.backtester = backtester
-        self.max_memory_gb = max_memory_gb
-
-    def optimize_in_batches(self, param_ranges, batch_size=100):
-        """Optimize in smaller batches to manage memory"""
-
-        # Generate all parameter combinations
-        all_params = list(self.generate_combinations(param_ranges))
-
-        # Process in batches
-        all_results = []
-
-        for i in range(0, len(all_params), batch_size):
-            batch_params = all_params[i:i+batch_size]
-
-            # Run optimization on this batch
-            _, _, batch_results = self.backtester.optimize(
-                params={k: [p[k] for p in batch_params] for k in param_ranges.keys()},
-                constraint=lambda p: p in batch_params
-            )
-
-            all_results.append(batch_results)
-
-            # Memory management
-            if i % (batch_size * 5) == 0:
-                import gc
-                gc.collect()
-
-        # Combine all results
-        return pd.concat(all_results, ignore_index=True)
-
-    def generate_combinations(self, param_ranges):
-        """Generate all parameter combinations"""
-        import itertools
-
-        keys = list(param_ranges.keys())
-        values = [list(param_ranges[key]) for key in keys]
-
-        for combination in itertools.product(*values):
-            yield dict(zip(keys, combination))
+best_params, best_report, results_df = backtester.optimize_parallel(
+    params,
+    workers=4,
+    chunksize=1,
+)
 ```
 
-## Optimization Analysis
+### How it works
 
-### Results Visualization
+The implementation:
+
+1. materializes parameter ranges
+2. pickles the base strategy in [`SimpleBacktester.optimize_parallel()`](../../src/quantex/backtester.py:760)
+3. initializes worker state through [`_worker_init()`](../../src/quantex/backtester.py:77)
+4. evaluates combinations in [`_worker_eval()`](../../src/quantex/backtester.py:106)
+5. rebuilds a results DataFrame in the main process
+6. reruns the best parameter set locally to obtain a full [`BacktestReport`](../../src/quantex/backtester.py:188)
+
+### Choosing worker counts
+
+If you pass `workers=None`, the method chooses a conservative value in [`SimpleBacktester.optimize_parallel()`](../../src/quantex/backtester.py:755).
+
+## What metrics are compared
+
+The optimizer calculates or stores:
+
+- `final_cash`
+- `total_return`
+- `sharpe`
+- `max_drawdown`
+- `trades`
+
+The sequential optimizer computes these inside [`SimpleBacktester.optimize()`](../../src/quantex/backtester.py:587).
+
+The parallel optimizer computes them in [`_worker_eval()`](../../src/quantex/backtester.py:151).
+
+## How the best result is chosen
+
+### Sequential optimizer
+
+[`SimpleBacktester.optimize()`](../../src/quantex/backtester.py:624) primarily scores combinations by Sharpe ratio. If Sharpe is not finite, it heavily penalizes the result.
+
+### Parallel optimizer
+
+[`SimpleBacktester.optimize_parallel()`](../../src/quantex/backtester.py:786) builds a score from Sharpe ratio, but only when total return is positive.
+
+That means the two methods are similar but not perfectly identical in how they rank edge cases.
+
+## Reading `results_df`
+
+The returned `results_df` is a pandas DataFrame containing one row per evaluated combination.
+
+Example:
 
 ```python
-def plot_optimization_results(self, results_df):
-    """Visualize optimization results"""
-
-    fig, axes = plt.subplots(2, 2, figsize=(15, 12))
-
-    # Sharpe ratio distribution
-    axes[0, 0].hist(results_df['sharpe'].dropna(), bins=50, alpha=0.7)
-    axes[0, 0].axvline(results_df['sharpe'].max(), color='red', linestyle='--',
-                       label=f'Best: {results_df["sharpe"].max():.2f}')
-    axes[0, 0].set_xlabel('Sharpe Ratio')
-    axes[0, 0].set_ylabel('Frequency')
-    axes[0, 0].set_title('Sharpe Ratio Distribution')
-    axes[0, 0].legend()
-    axes[0, 0].grid(True)
-
-    # Parameter relationships (example with 2 parameters)
-    if 'fast_period' in results_df.columns and 'slow_period' in results_df.columns:
-        scatter = axes[0, 1].scatter(results_df['fast_period'],
-                                   results_df['slow_period'],
-                                   c=results_df['sharpe'],
-                                   cmap='viridis', alpha=0.6)
-        axes[0, 1].set_xlabel('Fast Period')
-        axes[0, 1].set_ylabel('Slow Period')
-        axes[0, 1].set_title('Sharpe Ratio by Parameters')
-        plt.colorbar(scatter, ax=axes[0, 1], label='Sharpe Ratio')
-
-    # Top results table
-    top_results = results_df.nlargest(10, 'sharpe')
-    axes[1, 0].axis('tight')
-    axes[1, 0].axis('off')
-    axes[1, 0].set_title('Top 10 Results')
-
-    table_data = []
-    for _, row in top_results.iterrows():
-        table_data.append([f"{row.get('fast_period', 'N/A')}",
-                          f"{row.get('slow_period', 'N/A')}",
-                          f"{row.get('sharpe', 0):.2f}",
-                          f"{row.get('total_return', 0):.2%}"])
-
-    table = axes[1, 0].table(cellText=table_data,
-                           colLabels=['Fast Period', 'Slow Period', 'Sharpe', 'Return'],
-                           cellLoc='center', loc='center')
-    table.auto_set_font_size(False)
-    table.set_fontsize(9)
-    table.scale(1.2, 2)
-
-    # Cumulative returns distribution
-    axes[1, 1].hist(results_df['total_return'].dropna(), bins=50, alpha=0.7)
-    axes[1, 1].axvline(results_df['total_return'].max(), color='red', linestyle='--',
-                       label=f'Best: {results_df["total_return"].max():.2%}')
-    axes[1, 1].set_xlabel('Total Return')
-    axes[1, 1].set_ylabel('Frequency')
-    axes[1, 1].set_title('Total Return Distribution')
-    axes[1, 1].legend()
-    axes[1, 1].grid(True)
-
-    plt.tight_layout()
-    plt.show()
+print(results_df.columns)
+print(results_df.head())
 ```
 
-### Parameter Sensitivity Analysis
+Useful patterns:
 
 ```python
-def analyze_parameter_sensitivity(self, results_df, param_columns):
-    """Analyze how sensitive results are to each parameter"""
-
-    sensitivity_results = {}
-
-    for param in param_columns:
-        if param in results_df.columns:
-            # Group by parameter value and calculate statistics
-            param_stats = results_df.groupby(param)['sharpe'].agg([
-                'count', 'mean', 'std', 'min', 'max'
-            ]).round(4)
-
-            sensitivity_results[param] = param_stats
-
-            print(f"\n{param} Sensitivity:")
-            print(param_stats)
-
-    return sensitivity_results
+top_10 = results_df.head(10)
+positive_returns = results_df[results_df["total_return"] > 0]
 ```
 
-### Optimization Stability
+### Important caveat about the `trades` column
+
+The `trades` field is inconsistent across implementations:
+
+- [`SimpleBacktester.optimize()`](../../src/quantex/backtester.py:619) stores `report.orders`
+- [`_worker_eval()`](../../src/quantex/backtester.py:179) stores `len(report.orders)`
+
+So if you compare sequential and parallel optimization outputs, do not assume the `trades` column has the same type.
+
+## Practical optimization workflow
+
+### Step 1: start with a small grid
 
 ```python
-def test_optimization_stability(self, strategy_class, data, num_runs=5):
-    """Test if optimization results are stable across multiple runs"""
-
-    optimization_results = []
-
-    for run in range(num_runs):
-        # Create fresh strategy and backtester
-        strategy = strategy_class()
-        backtester = SimpleBacktester(strategy, cash=10000)
-
-        # Run optimization
-        best_params, best_report, results_df = backtester.optimize(
-            params=param_ranges
-        )
-
-        optimization_results.append({
-            'run': run,
-            'best_params': best_params,
-            'best_sharpe': best_report.sharpe,
-            'best_return': best_report.total_return
-        })
-
-    # Analyze stability
-    results_df = pd.DataFrame(optimization_results)
-
-    print("Optimization Stability Analysis:")
-    print(f"Best Sharpe std: {results_df['best_sharpe'].std():.4f}")
-    print(f"Best Return std: {results_df['best_return'].std():.4f}")
-
-    # Check parameter consistency
-    param_consistency = {}
-    for param in param_ranges.keys():
-        param_values = [result['best_params'][param] for result in optimization_results]
-        param_consistency[param] = {
-            'mean': np.mean(param_values),
-            'std': np.std(param_values),
-            'unique_values': len(set(param_values))
-        }
-
-    print("\nParameter Consistency:")
-    for param, stats in param_consistency.items():
-        print(f"{param}: mean={stats['mean']:.2f}, std={stats['std']:.2f}, "
-              f"unique_values={stats['unique_values']}")
-
-    return results_df
+params = {
+    "fast_period": [5, 10],
+    "slow_period": [20, 30],
+}
 ```
 
-## Walk-Forward Optimization
-
-### Rolling Window Optimization
+### Step 2: add a validity constraint
 
 ```python
-def walk_forward_optimization(self, strategy_class, data, window_years=2, step_months=3):
-    """Perform walk-forward optimization"""
-
-    results = []
-    start_time = data.Index[0]
-    end_time = data.Index[-1]
-
-    current_start = start_time
-
-    while True:
-        # Define optimization window
-        window_end = current_start + pd.DateOffset(years=window_years)
-
-        # Define test window
-        test_start = window_end
-        test_end = test_start + pd.DateOffset(months=step_months)
-
-        if test_end > end_time:
-            break
-
-        # Filter data for optimization window
-        opt_data = data[(data.Index >= current_start) & (data.Index < window_end)]
-
-        if len(opt_data) < 100:  # Need minimum data
-            current_start = current_start + pd.DateOffset(months=1)
-            continue
-
-        # Run optimization on window
-        strategy = strategy_class()
-        backtester = SimpleBacktester(strategy, cash=10000)
-
-        # You'd need to modify backtester to use data subset
-        # This is a conceptual example
-
-        # Test optimized parameters on test window
-        test_strategy = strategy_class(**best_params)
-        test_backtester = SimpleBacktester(test_strategy, cash=10000)
-
-        results.append({
-            'opt_start': current_start,
-            'opt_end': window_end,
-            'test_start': test_start,
-            'test_end': test_end,
-            'best_params': best_params,
-            'oos_sharpe': oos_sharpe,
-            'oos_return': oos_return
-        })
-
-        # Move window
-        current_start = current_start + pd.DateOffset(months=step_months)
-
-    return pd.DataFrame(results)
+constraint=lambda p: p["fast_period"] < p["slow_period"]
 ```
 
-### Walk-Forward Analysis
+### Step 3: inspect the top results
 
 ```python
-def analyze_walk_forward_results(self, wf_results):
-    """Analyze walk-forward optimization results"""
-
-    print("Walk-Forward Analysis Results:")
-    print(f"Total windows: {len(wf_results)}")
-    print(f"Average OOS Sharpe: {wf_results['oos_sharpe'].mean():.2f}")
-    print(f"OOS Sharpe std: {wf_results['oos_sharpe'].std():.2f}")
-    print(f"Best OOS Sharpe: {wf_results['oos_sharpe'].max():.2f}")
-    print(f"Worst OOS Sharpe: {wf_results['oos_sharpe'].min():.2f}")
-
-    # Check for consistency
-    profitable_windows = len(wf_results[wf_results['oos_sharpe'] > 0])
-    print(f"Profitable windows: {profitable_windows}/{len(wf_results)} "
-          f"({profitable_windows/len(wf_results):.1%})")
-
-    # Parameter stability over time
-    print("\nParameter Evolution:")
-    for _, row in wf_results.iterrows():
-        print(f"{row['test_start'].strftime('%Y-%m')}: {row['best_params']}")
-
-    return {
-        'total_windows': len(wf_results),
-        'avg_oos_sharpe': wf_results['oos_sharpe'].mean(),
-        'sharpe_std': wf_results['oos_sharpe'].std(),
-        'profitability_rate': profitable_windows / len(wf_results)
-    }
+print(results_df.head())
 ```
 
-## Optimization Best Practices
-
-### 1. Parameter Range Selection
+### Step 4: rerun and inspect the best report
 
 ```python
-def select_reasonable_ranges(self, strategy_class, initial_data):
-    """Select reasonable parameter ranges based on data characteristics"""
-
-    # Analyze data to inform parameter selection
-    close_prices = initial_data.Close
-    price_series = pd.Series(close_prices)
-
-    # Calculate data statistics
-    avg_price = price_series.mean()
-    price_std = price_series.std()
-    data_length = len(price_series)
-
-    # Suggest parameter ranges based on data
-    suggested_ranges = {}
-
-    # Period ranges based on data length
-    max_period = min(data_length // 10, 100)  # Max 10% of data or 100
-    suggested_ranges['fast_period'] = range(5, min(max_period, 30), 2)
-    suggested_ranges['slow_period'] = range(20, min(max_period * 2, 200), 5)
-
-    # Position size based on risk tolerance
-    suggested_ranges['position_size'] = [0.1, 0.2, 0.3, 0.4, 0.5, 0.75, 1.0]
-
-    # Stop loss based on volatility
-    volatility = price_series.pct_change().std()
-    suggested_ranges['stop_loss'] = [-volatility * 2, -volatility * 3, -volatility * 4]
-
-    print("Suggested parameter ranges:")
-    for param, values in suggested_ranges.items():
-        print(f"{param}: {list(values)[:5]}{'...' if len(values) > 5 else ''}")
-
-    return suggested_ranges
+print(best_params)
+print(best_report)
+best_report.plot()
 ```
 
-### 2. Overfitting Prevention
+## Overfitting warning
 
-```python
-def prevent_overfitting(self, strategy_class, data):
-    """Implement overfitting prevention measures"""
+Optimization can easily produce attractive in-sample results that do not generalize.
 
-    # 1. Use out-of-sample testing
-    train_data, test_data = self.split_data_for_oos(data, split_ratio=0.7)
+Quantex currently gives you the grid search machinery, but it does not automatically perform:
 
-    # 2. Optimize on training data
-    train_strategy = strategy_class()
-    train_backtester = SimpleBacktester(train_strategy, cash=10000)
+- train/test splits for optimization runs
+- walk-forward analysis
+- cross-validation
+- stability analysis
 
-    # 3. Test on both training and test data
-    # 4. Compare performance - if training >> test, likely overfitting
+If you need those workflows, build them around [`DataSource`](../../src/quantex/datasource.py:6), [`SimpleBacktester`](../../src/quantex/backtester.py:356), and your own experiment code.
 
-    # 5. Use walk-forward analysis for realistic expectations
+## Performance considerations
 
-    # 6. Consider transaction costs in optimization
+### Use sequential search when
 
-    # 7. Use multiple performance metrics, not just one
+- your grid is small
+- you want simpler debugging
+- you are iterating on strategy design
 
-    return True
-```
+### Use parallel search when
 
-### 3. Computational Efficiency
+- the grid is large enough to justify multiprocessing
+- the strategy and data are picklable
+- your machine has spare CPU and memory capacity
 
-```python
-def optimize_efficiently(self, param_ranges, max_combinations=10000):
-    """Optimize computational efficiency"""
+The parallel implementation keeps a copy of the strategy in each worker, so memory usage scales with worker count.
 
-    # Calculate total combinations
-    total_combos = 1
-    for values in param_ranges.values():
-        total_combos *= len(list(values))
+## What the current optimizer does not include
 
-    print(f"Total combinations: {total_combos}")
+The current codebase does **not** include:
 
-    if total_combos > max_combinations:
-        print(f"Too many combinations ({total_combos} > {max_combinations})")
-        print("Consider reducing parameter ranges or using constraints")
+- Bayesian optimization
+- evolutionary algorithms
+- native multi-objective optimization
+- built-in walk-forward optimization
+- automatic out-of-sample validation reports
 
-        # Suggest reductions
-        reduction_suggestions = self.suggest_range_reductions(param_ranges, max_combinations)
-        return reduction_suggestions
+Some older documentation discussed those ideas conceptually, but they are not implemented as first-class library features.
 
-    return param_ranges
+## Summary
 
-def suggest_range_reductions(self, param_ranges, target_combinations):
-    """Suggest how to reduce parameter ranges"""
+Use [`SimpleBacktester.optimize()`](../../src/quantex/backtester.py:485) or [`SimpleBacktester.optimize_parallel()`](../../src/quantex/backtester.py:659) when you want exhaustive grid search over strategy attributes.
 
-    suggestions = {}
+Keep these points in mind:
 
-    for param, values in param_ranges.items():
-        current_count = len(list(values))
+1. parameters are applied as plain strategy attributes
+2. constraints are optional but often necessary
+3. optimization results are only as meaningful as your validation process
 
-        # Calculate how many we need to remove
-        total_current = 1
-        for v in param_ranges.values():
-            total_current *= len(list(v))
+For the underlying simulation model, see [Backtesting guide](./backtesting.md).
 
-        # Proportionally reduce this parameter
-        target_per_param = int(target_combinations ** (1/len(param_ranges)))
-
-        if current_count > target_per_param:
-            values_list = list(values)
-            step = max(1, current_count // target_per_param)
-            suggestions[param] = values_list[::step]
-        else:
-            suggestions[param] = values
-
-    return suggestions
-```
-
-## Custom Optimization Metrics
-
-### Multi-Objective Optimization
-
-```python
-def multi_objective_optimization(self, param_ranges, weights={'sharpe': 0.5, 'return': 0.3, 'drawdown': 0.2}):
-    """Optimize multiple objectives simultaneously"""
-
-    def calculate_composite_score(row):
-        """Calculate composite score from multiple metrics"""
-
-        score = 0
-        for metric, weight in weights.items():
-            if metric == 'sharpe':
-                value = row.get('sharpe', 0)
-            elif metric == 'return':
-                value = row.get('total_return', 0)
-            elif metric == 'drawdown':
-                value = -row.get('max_drawdown', 0)  # Negative because lower is better
-            else:
-                value = row.get(metric, 0)
-
-            score += value * weight
-
-        return score
-
-    # Run standard optimization
-    best_params, best_report, results_df = self.backtester.optimize(
-        params=param_ranges
-    )
-
-    # Calculate composite scores
-    results_df['composite_score'] = results_df.apply(calculate_composite_score, axis=1)
-
-    # Find best by composite score
-    best_composite_idx = results_df['composite_score'].idxmax()
-    best_composite_params = results_df.loc[best_composite_idx]
-
-    return best_composite_params, results_df
-```
-
-### Risk-Adjusted Optimization
-
-```python
-def risk_adjusted_optimization(self, param_ranges, risk_free_rate=0.04):
-    """Optimize risk-adjusted returns"""
-
-    def calculate_risk_adjusted_score(row):
-        """Calculate risk-adjusted performance score"""
-
-        sharpe = row.get('sharpe', 0)
-        max_dd = row.get('max_drawdown', 0)
-        total_return = row.get('total_return', 0)
-
-        # Penalize high drawdowns
-        if max_dd > 0.1:  # If drawdown > 10%
-            penalty = max_dd * 2  # Penalty factor
-            adjusted_sharpe = sharpe - penalty
-        else:
-            adjusted_sharpe = sharpe
-
-        # Boost for high returns with reasonable risk
-        if total_return > 0.5 and max_dd < 0.15:  # 50% return, 15% max DD
-            bonus = 0.5
-            adjusted_sharpe += bonus
-
-        return adjusted_sharpe
-
-    # Run optimization with custom scoring
-    best_params, best_report, results_df = self.backtester.optimize(
-        params=param_ranges
-    )
-
-    # Apply risk-adjusted scoring
-    results_df['risk_adjusted_score'] = results_df.apply(calculate_risk_adjusted_score, axis=1)
-
-    # Re-rank results
-    results_df = results_df.sort_values('risk_adjusted_score', ascending=False)
-
-    return results_df.iloc[0], results_df
-```
-
-## Optimization Workflow
-
-### Complete Optimization Pipeline
-
-```python
-class OptimizationPipeline:
-    def __init__(self, strategy_class, data_source):
-        self.strategy_class = strategy_class
-        self.data_source = data_source
-
-    def run_complete_optimization(self, param_ranges, enable_parallel=True):
-        """Run complete optimization pipeline"""
-
-        print("=== Optimization Pipeline ===")
-
-        # 1. Data validation
-        print("1. Validating data...")
-        if not self.validate_data():
-            return None
-
-        # 2. Parameter range optimization
-        print("2. Optimizing parameter ranges...")
-        optimized_ranges = self.optimize_parameter_ranges(param_ranges)
-
-        # 3. Run optimization
-        print("3. Running optimization...")
-        strategy = self.strategy_class()
-        backtester = SimpleBacktester(strategy, cash=10000)
-
-        if enable_parallel:
-            best_params, best_report, results_df = backtester.optimize_parallel(
-                params=optimized_ranges,
-                workers=os.cpu_count() - 1
-            )
-        else:
-            best_params, best_report, results_df = backtester.optimize(
-                params=optimized_ranges
-            )
-
-        # 4. Out-of-sample validation
-        print("4. Running out-of-sample validation...")
-        oos_performance = self.validate_out_of_sample(best_params)
-
-        # 5. Walk-forward analysis
-        print("5. Running walk-forward analysis...")
-        wf_results = self.walk_forward_analysis(best_params)
-
-        # 6. Generate report
-        print("6. Generating optimization report...")
-        report = self.generate_optimization_report(
-            best_params, best_report, results_df, oos_performance, wf_results
-        )
-
-        return report
-
-    def validate_data(self):
-        """Validate input data quality"""
-        # Implementation here
-        return True
-
-    def optimize_parameter_ranges(self, param_ranges):
-        """Optimize parameter ranges for efficiency"""
-        # Implementation here
-        return param_ranges
-
-    def validate_out_of_sample(self, best_params):
-        """Validate best parameters on out-of-sample data"""
-        # Implementation here
-        return {}
-
-    def walk_forward_analysis(self, best_params):
-        """Perform walk-forward analysis"""
-        # Implementation here
-        return pd.DataFrame()
-
-    def generate_optimization_report(self, *args):
-        """Generate comprehensive optimization report"""
-        # Implementation here
-        return {}
-```
-
-## Next Steps
-
-Now that you understand parameter optimization in QuantEx, explore these related topics:
-
-- **[Strategy Guide](./strategy.md)**: Learn how to design optimizable strategies
-- **[Backtesting Guide](./backtesting.md)**: Understand how optimization integrates with backtesting
-- **[Technical Indicators Guide](./indicators.md)**: Optimize indicator parameters
-
-For complete API reference, see the [Optimization API documentation](../../reference/quantex.optimizer.md).

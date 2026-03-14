@@ -1,629 +1,280 @@
-# Backtesting Engine Guide
+# Backtesting Guide
 
-This guide covers how to use QuantEx's backtesting engine to test your trading strategies against historical data.
+This guide explains what Quantex actually does when you run a backtest and how to interpret the results.
 
-## Overview
+If you are new to the library, a backtest in Quantex means:
 
-The `SimpleBacktester` class is the core component for running backtests in QuantEx. It provides:
+- your strategy class is executed on historical bars
+- brokers manage orders and positions for each symbol
+- equity is recorded over time
+- a [`BacktestReport`](../../src/quantex/backtester.py:188) is returned at the end
 
-- **Realistic execution simulation**: Market orders, limit orders, stop losses, take profits
-- **Commission modeling**: Percentage-based or fixed cash commissions
-- **Performance metrics**: Sharpe ratio, maximum drawdown, total return, and more
-- **Progress tracking**: Visual progress bars for long-running backtests
-- **Memory efficiency**: Optimized for large datasets
+## The backtester class
 
-## Basic Backtesting
+The central class is [`SimpleBacktester`](../../src/quantex/backtester.py:356).
 
-### Simple Backtest
+Constructor signature:
+
+- strategy: a concrete [`Strategy`](../../src/quantex/strategy.py:9)
+- `cash`: starting capital
+- `commission`: commission rate or cash amount, depending on commission type
+- `commission_type`: a [`CommissionType`](../../src/quantex/enums.py:4)
+- `lot_size`: used for cash commission calculations
+- `margin_call`: threshold used in broker margin logic
+
+## Smallest working example
 
 ```python
-from quantex import Strategy, SimpleBacktester, CSVDataSource, CommissionType
+from quantex import Strategy, CSVDataSource, SimpleBacktester
 
-# Create your strategy
-class MyStrategy(Strategy):
+
+class BuyAndHold(Strategy):
+    def __init__(self):
+        super().__init__()
+        self.entered = False
+
     def init(self):
-        data = CSVDataSource('data/EURUSD.csv')
-        self.add_data(data, 'EURUSD')
+        self.add_data(CSVDataSource("data.csv"), "TEST")
 
     def next(self):
-        # Your trading logic here
-        pass
+        if not self.entered and len(self.data["TEST"].Close) >= 2:
+            self.positions["TEST"].buy(quantity=1.0)
+            self.entered = True
 
-# Set up and run backtest
-strategy = MyStrategy()
-backtester = SimpleBacktester(strategy, cash=10000)
+
+strategy = BuyAndHold()
+backtester = SimpleBacktester(strategy, cash=10_000)
 report = backtester.run()
 
-# Display results
 print(report)
 ```
 
-### Backtester Configuration
+## What happens inside [`SimpleBacktester.run()`](../../src/quantex/backtester.py:414)
+
+The method does the following in order:
+
+1. splits cash evenly across all brokers in [`SimpleBacktester.run()`](../../src/quantex/backtester.py:443)
+2. calls [`Strategy.init()`](../../src/quantex/strategy.py:52)
+3. loops over the longest attached data series in [`SimpleBacktester.run()`](../../src/quantex/backtester.py:456)
+4. updates each source's current index
+5. calls [`Broker._iterate()`](../../src/quantex/broker.py:483) on each broker
+6. updates indicator visibility windows
+7. calls [`Strategy.next()`](../../src/quantex/strategy.py:71)
+8. asks each broker to close open positions at the end via [`Broker.close()`](../../src/quantex/broker.py:307)
+9. aggregates broker equity into the final [`BacktestReport.PnlRecord`](../../src/quantex/backtester.py:205)
+
+## Important behavior to understand
+
+### Strategy copy behavior
+
+[`SimpleBacktester.__init__()`](../../src/quantex/backtester.py:380) deep-copies the strategy you pass in.
+
+That means the strategy object inside the backtester is not the same Python object you originally created.
+
+### Cash allocation in multi-symbol tests
+
+If you attach multiple symbols, starting cash is divided equally across the symbol-specific brokers in [`SimpleBacktester.run()`](../../src/quantex/backtester.py:443).
+
+This avoids double-counting cash across symbols, but it also means each symbol starts with only part of the total portfolio cash.
+
+### Orders are processed before [`Strategy.next()`](../../src/quantex/strategy.py:71)
+
+In each loop, brokers process existing orders before the strategy places new ones for that same step. This means a newly placed order is not processed until the following iteration.
+
+### Market orders use the open price
+
+The broker executes market orders using [`DataSource.COpen`](../../src/quantex/datasource.py:145), not the close.
+
+That detail matters when you compare expected trade prices with results.
+
+## Backtest configuration
 
 ```python
-# Configure backtester with custom settings
+from quantex import CommissionType
+
 backtester = SimpleBacktester(
     strategy,
-    cash=50000,                    # Starting capital
-    commission=0.002,             # 0.2% commission per trade
-    commission_type=CommissionType.PERCENTAGE,  # or CASH
-    lot_size=1                    # Lot size multiplier
-)
-
-# Run with progress bar disabled for faster execution
-report = backtester.run(progress_bar=False)
-```
-
-## Understanding Backtest Results
-
-### BacktestReport Structure
-
-The `run()` method returns a `BacktestReport` object with the following attributes:
-
-```python
-report = backtester.run()
-
-# Basic information
-print(f"Starting Cash: ${report.starting_cash:,.2f}")
-print(f"Final Cash: ${report.final_cash:,.2f}")
-print(f"Total Return: {report.total_return:.2%}")
-
-# PnL time series (pandas Series)
-pnl_series = report.PnlRecord
-
-# All executed orders
-orders = report.orders
-print(f"Total Trades: {len(orders)}")
-
-# Performance metrics (via __str__ method)
-print(report)  # Comprehensive performance summary
-```
-
-### Performance Metrics
-
-The backtester automatically calculates several key performance metrics:
-
-```python
-# Access detailed metrics
-print(f"Total Return: {report.total_return:.2%}")
-print(f"Annualized Sharpe Ratio: {report.sharpe:.2f}")
-print(f"Maximum Drawdown: {report.max_drawdown:.2%}")
-print(f"Number of Trades: {len(report.orders)}")
-
-# Risk-free rate assumption (4% annual)
-# Periods per year (inferred from data frequency)
-print(f"Periods per Year: {report.periods_per_year}")
-```
-
-## Advanced Backtesting Features
-
-### Custom Commission Models
-
-```python
-# Percentage-based commission (default)
-backtester = SimpleBacktester(
-    strategy,
-    commission=0.002,  # 0.2%
-    commission_type=CommissionType.PERCENTAGE
-)
-
-# Fixed cash commission
-backtester = SimpleBacktester(
-    strategy,
-    commission=1.00,  # $1 per trade
-    commission_type=CommissionType.CASH
+    cash=50_000,
+    commission=0.002,
+    commission_type=CommissionType.PERCENTAGE,
+    lot_size=1,
+    margin_call=0.5,
 )
 ```
 
-### Multi-Symbol Backtesting
+### Commission types
+
+The available commission modes come from [`CommissionType`](../../src/quantex/enums.py:4):
+
+- [`CommissionType.PERCENTAGE`](../../src/quantex/enums.py:17)
+- [`CommissionType.CASH`](../../src/quantex/enums.py:18)
+
+Commission is applied through [`Broker._calc_commission()`](../../src/quantex/broker.py:440).
+
+## Understanding the report object
+
+[`SimpleBacktester.run()`](../../src/quantex/backtester.py:414) returns [`BacktestReport`](../../src/quantex/backtester.py:188).
+
+Key fields:
+
+- [`BacktestReport.starting_cash`](../../src/quantex/backtester.py:203)
+- [`BacktestReport.final_cash`](../../src/quantex/backtester.py:204)
+- [`BacktestReport.PnlRecord`](../../src/quantex/backtester.py:205)
+- [`BacktestReport.orders`](../../src/quantex/backtester.py:206)
+- [`BacktestReport.tradeRecord`](../../src/quantex/backtester.py:207)
+
+Key derived properties and methods:
+
+- [`BacktestReport.total_return`](../../src/quantex/backtester.py:227)
+- [`BacktestReport.periods_per_year`](../../src/quantex/backtester.py:214)
+- [`BacktestReport.kelly_criterion`](../../src/quantex/backtester.py:232)
+- [`BacktestReport.plot()`](../../src/quantex/backtester.py:252)
+- [`BacktestReport.__str__()`](../../src/quantex/backtester.py:299)
+
+Example:
 
 ```python
-class MultiSymbolStrategy(Strategy):
+print(report.starting_cash)
+print(report.final_cash)
+print(report.total_return)
+print(report.periods_per_year)
+print(report.orders)
+report.plot()
+```
+
+## About Sharpe ratio and summary output
+
+The summary string from [`BacktestReport.__str__()`](../../src/quantex/backtester.py:299) computes Sharpe ratio directly from the equity returns series.
+
+Important correction: the current [`BacktestReport`](../../src/quantex/backtester.py:188) does **not** expose a `report.sharpe` attribute or a `report.max_drawdown` property. Older docs referenced them as direct attributes, but the current code only computes those values inside string formatting or helper functions.
+
+If you want maximum drawdown directly, use [`max_drawdown()`](../../src/quantex/backtester.py:19) on [`BacktestReport.PnlRecord`](../../src/quantex/backtester.py:205):
+
+```python
+from quantex.backtester import max_drawdown
+
+dd = max_drawdown(report.PnlRecord)
+print(dd)
+```
+
+## Visualization
+
+[`BacktestReport.plot()`](../../src/quantex/backtester.py:252) creates two panels:
+
+- equity curve
+- drawdown area chart
+
+```python
+report.plot(figsize=(12, 6))
+```
+
+## Multi-symbol backtests
+
+```python
+from quantex import Strategy, CSVDataSource, SimpleBacktester
+
+
+class TwoSymbolStrategy(Strategy):
     def init(self):
-        # Load multiple symbols
-        symbols = ['EURUSD', 'GBPUSD', 'USDJPY']
-
-        for symbol in symbols:
-            data = CSVDataSource(f'data/{symbol}.csv')
-            self.add_data(data, symbol)
+        self.add_data(CSVDataSource("eurusd.csv"), "EURUSD")
+        self.add_data(CSVDataSource("gbpusd.csv"), "GBPUSD")
 
     def next(self):
-        # Trade multiple symbols
-        for symbol in ['EURUSD', 'GBPUSD', 'USDJPY']:
-            if self.should_trade(symbol):
-                self.positions[symbol].buy(0.3)  # 30% allocation each
+        if self.data["EURUSD"].CClose > self.data["GBPUSD"].CClose:
+            self.positions["EURUSD"].buy(quantity=0.2)
 
-# Run multi-symbol backtest
-strategy = MultiSymbolStrategy()
-backtester = SimpleBacktester(strategy, cash=100000)
-report = backtester.run()
+
+report = SimpleBacktester(TwoSymbolStrategy(), cash=20_000).run()
 ```
 
-## Parameter Optimization
+Remember that each broker receives an equal share of the starting cash in this setup.
 
-### Grid Search Optimization
+## Optimization from the backtester
+
+[`SimpleBacktester`](../../src/quantex/backtester.py:356) also provides parameter search.
+
+### Sequential grid search
 
 ```python
-# Define parameter ranges to test
-param_ranges = {
-    'fast_period': range(5, 21, 2),    # 5, 7, 9, ..., 19
-    'slow_period': range(20, 51, 5),   # 20, 25, 30, ..., 50
-    'position_size': [0.1, 0.2, 0.3, 0.4, 0.5]
+params = {
+    "fast_period": range(5, 11),
+    "slow_period": range(15, 31, 5),
 }
 
-# Run optimization
 best_params, best_report, results_df = backtester.optimize(
-    params=param_ranges
-)
-
-print(f"Best Parameters: {best_params}")
-print(f"Best Sharpe Ratio: {best_report.sharpe:.2f}")
-print(f"Total Combinations Tested: {len(results_df)}")
-```
-
-### Optimization with Constraints
-
-```python
-# Define parameter constraints
-def constraint_func(params):
-    """Only test valid parameter combinations"""
-    return params['fast_period'] < params['slow_period']
-
-# Run constrained optimization
-best_params, best_report, results_df = backtester.optimize(
-    params=param_ranges,
-    constraint=constraint_func
+    params,
+    constraint=lambda p: p["fast_period"] < p["slow_period"],
 )
 ```
 
-### Parallel Optimization
+### Parallel grid search
 
 ```python
-# Use multiple CPU cores for faster optimization
 best_params, best_report, results_df = backtester.optimize_parallel(
-    params=param_ranges,
-    workers=4,           # Use 4 worker processes
-    chunksize=10         # Process 10 combinations per chunk
-)
-
-# Let backtester choose optimal worker count
-best_params, best_report, results_df = backtester.optimize_parallel(
-    params=param_ranges,
-    workers=None  # Auto-detect optimal worker count
+    params,
+    workers=4,
+    chunksize=1,
 )
 ```
 
-## Analyzing Backtest Results
+The parallel method is defined in [`SimpleBacktester.optimize_parallel()`](../../src/quantex/backtester.py:659).
 
-### Performance Visualization
+## Reading optimization results
 
-```python
-import matplotlib.pyplot as plt
+Both optimization methods return:
 
-# Plot equity curve
-plt.figure(figsize=(12, 6))
-plt.plot(report.PnlRecord.index, report.PnlRecord.values)
-plt.title('Equity Curve')
-plt.xlabel('Date')
-plt.ylabel('Portfolio Value')
-plt.grid(True)
-plt.show()
+1. `best_params`
+2. `best_report`
+3. `results_df`
 
-# Plot drawdown
-def calculate_drawdown(equity_curve):
-    """Calculate drawdown series"""
-    peak = equity_curve.expanding().max()
-    drawdown = (equity_curve - peak) / peak
-    return drawdown
+`results_df` is a pandas DataFrame assembled from the evaluated parameter combinations.
 
-drawdown = calculate_drawdown(report.PnlRecord)
-plt.figure(figsize=(12, 6))
-plt.fill_between(drawdown.index, drawdown.values, 0, alpha=0.3, color='red')
-plt.plot(drawdown.index, drawdown.values, color='red')
-plt.title('Drawdown')
-plt.xlabel('Date')
-plt.ylabel('Drawdown')
-plt.grid(True)
-plt.show()
-```
+Important detail from the current implementation:
 
-### Trade Analysis
+- [`SimpleBacktester.optimize()`](../../src/quantex/backtester.py:485) stores `report.orders` in the `trades` column, not a trade count
+- [`SimpleBacktester.optimize_parallel()`](../../src/quantex/backtester.py:659) stores a numeric trade count in the `trades` field returned by workers
+
+So treat the `trades` column carefully depending on which optimizer you used.
+
+## Practical debugging tips
+
+### Print broker state inside the strategy
 
 ```python
-# Analyze individual trades
-trades = []
-
-for order in report.orders:
-    if order.status == OrderStatus.COMPLETE:
-        trades.append({
-            'timestamp': order.timestamp,
-            'side': order.side,
-            'quantity': order.quantity,
-            'price': order.price,
-            'symbol': 'EURUSD'  # You'd need to track this
-        })
-
-trades_df = pd.DataFrame(trades)
-
-# Calculate trade statistics
-winning_trades = trades_df[trades_df['pnl'] > 0]
-losing_trades = trades_df[trades_df['pnl'] <= 0]
-
-print(f"Win Rate: {len(winning_trades) / len(trades_df):.2%}")
-print(f"Average Win: ${winning_trades['pnl'].mean():.2f}")
-print(f"Average Loss: ${losing_trades['pnl'].mean():.2f}")
-print(f"Profit Factor: {abs(winning_trades['pnl'].sum() / losing_trades['pnl'].sum()):.2f}")
+def next(self):
+    broker = self.positions["TEST"]
+    print(self.data["TEST"].Index[self.data["TEST"].current_index])
+    print(self.data["TEST"].COpen, self.data["TEST"].CClose)
+    print(broker.position, broker.cash)
 ```
 
-### Risk Metrics
+### Run without a progress bar when scripting
 
-```python
-def calculate_risk_metrics(equity_curve, risk_free_rate=0.04):
-    """Calculate comprehensive risk metrics"""
+[`SimpleBacktester.run()`](../../src/quantex/backtester.py:414) defaults to `progress_bar=False`, which is usually the cleanest option for logs and tests.
 
-    # Daily returns
-    daily_returns = equity_curve.pct_change().dropna()
+### Use the tests as reference behavior
 
-    # Sharpe ratio (already calculated in report)
-    sharpe = report.sharpe
+See [`tests/test_backtester.py`](../../tests/test_backtester.py) for the current expected behavior of initialization, reporting, optimization validation, and period inference.
 
-    # Maximum drawdown (already calculated in report)
-    max_dd = report.max_drawdown
+## Limitations and caveats
 
-    # Calmar ratio
-    calmar = report.total_return / max_dd if max_dd != 0 else np.inf
+The current implementation does **not** include:
 
-    # Sortino ratio (downside deviation)
-    downside_returns = daily_returns[daily_returns < 0]
-    downside_std = downside_returns.std()
-    sortino = (daily_returns.mean() - risk_free_rate/252) / downside_std * np.sqrt(252)
+- slippage modeling
+- partial fills
+- public order cancellation
+- built-in walk-forward analysis helpers
+- built-in out-of-sample evaluation workflow
 
-    # Value at Risk (95%)
-    var_95 = daily_returns.quantile(0.05)
+Older documentation described some of those topics conceptually, but they are not first-class features in the current code.
 
-    return {
-        'sharpe_ratio': sharpe,
-        'max_drawdown': max_dd,
-        'calmar_ratio': calmar,
-        'sortino_ratio': sortino,
-        'var_95': var_95,
-        'volatility': daily_returns.std() * np.sqrt(252)
-    }
+## Summary
 
-risk_metrics = calculate_risk_metrics(report.PnlRecord)
-for metric, value in risk_metrics.items():
-    print(f"{metric}: {value:.4f}")
-```
+Use [`SimpleBacktester`](../../src/quantex/backtester.py:356) when you want to:
 
-## Backtesting Best Practices
+- execute a strategy on historical data
+- get an equity curve and order log
+- compare parameter combinations with grid search
 
-### 1. Walk-Forward Analysis
+For more detail on order behavior, see [Execution guide](./execution.md). For strategy design, see [Strategy guide](./strategy.md).
 
-```python
-def walk_forward_analysis(strategy_class, data, train_years=2, test_years=1):
-    """Perform walk-forward optimization"""
-
-    results = []
-    start_year = data.Index[0].year
-    end_year = data.Index[-1].year
-
-    for train_end in range(start_year + train_years, end_year - test_years + 1):
-        # Split data
-        train_data = data[data.Index.year <= train_end]
-        test_data = data[(data.Index.year > train_end) &
-                        (data.Index.year <= train_end + test_years)]
-
-        if len(test_data) == 0:
-            continue
-
-        # Optimize on training data
-        temp_strategy = strategy_class()
-        temp_backtester = SimpleBacktester(temp_strategy, cash=10000)
-
-        # You'd need to implement a way to use subset of data
-        # This is a simplified example
-
-        results.append({
-            'train_end': train_end,
-            'test_return': test_return,
-            'test_sharpe': test_sharpe
-        })
-
-    return pd.DataFrame(results)
-```
-
-### 2. Out-of-Sample Testing
-
-```python
-# Split your data into in-sample and out-of-sample periods
-def split_data_for_oos(data_source, split_ratio=0.7):
-    """Split data for out-of-sample testing"""
-
-    total_len = len(data_source)
-    split_point = int(total_len * split_ratio)
-
-    # In-sample data (for optimization)
-    is_data = type(data_source)(data_source.data.iloc[:split_point])
-
-    # Out-of-sample data (for validation)
-    oos_data = type(data_source)(data_source.data.iloc[split_point:])
-
-    return is_data, oos_data
-
-# Use in optimization workflow
-is_data, oos_data = split_data_for_oos(data_source)
-
-# Optimize on in-sample data
-strategy = MyStrategy()
-backtester = SimpleBacktester(strategy, cash=10000)
-
-# Test optimized strategy on out-of-sample data
-oos_strategy = MyStrategy(**best_params)
-oos_backtester = SimpleBacktester(oos_strategy, cash=10000)
-# You'd need to modify backtester to use oos_data
-```
-
-### 3. Multiple Time Period Testing
-
-```python
-def test_across_periods(strategy_class, data, periods):
-    """Test strategy across different market periods"""
-
-    results = []
-
-    for period_name, (start_date, end_date) in periods.items():
-        # Filter data for period
-        period_data = data[(data.Index >= start_date) & (data.Index <= end_date)]
-
-        if len(period_data) == 0:
-            continue
-
-        # Run backtest for this period
-        strategy = strategy_class()
-        backtester = SimpleBacktester(strategy, cash=10000)
-
-        # Again, simplified - you'd need to modify backtester for data subset
-
-        results.append({
-            'period': period_name,
-            'return': period_return,
-            'sharpe': period_sharpe,
-            'max_dd': period_max_dd
-        })
-
-    return pd.DataFrame(results)
-```
-
-## Handling Backtesting Biases
-
-### Look-Ahead Bias Prevention
-
-```python
-class BiasFreeStrategy(Strategy):
-    def init(self):
-        # Load data
-        data = CSVDataSource('data/EURUSD.csv')
-        self.add_data(data, 'EURUSD')
-
-        # Initialize indicators with proper lookback
-        self.lookback = 50
-        self.prices = self.data['EURUSD'].Close
-
-    def next(self):
-        # Ensure we have enough data to avoid look-ahead bias
-        if len(self.data['EURUSD'].Close) < self.lookback:
-            return
-
-        # Use only historical data available at this point
-        current_idx = self.data['EURUSD'].current_index
-
-        # Calculate indicator using only data up to current index
-        historical_prices = self.prices[:current_idx + 1]
-        current_signal = self.calculate_signal(historical_prices)
-
-        # Execute trades based on historical signal
-        if current_signal > 0:
-            self.positions['EURUSD'].buy(0.5)
-```
-
-### Survivorship Bias
-
-```python
-# When testing multiple symbols, ensure you include delisted symbols
-def load_all_symbols(include_delisted=True):
-    """Load all symbols including those that no longer exist"""
-
-    all_symbols = []
-
-    if include_delisted:
-        # Load from historical symbol list
-        historical_symbols = load_historical_symbol_list()
-        for symbol in historical_symbols:
-            try:
-                data = CSVDataSource(f'data/archive/{symbol}.csv')
-                all_symbols.append(data)
-            except FileNotFoundError:
-                # Symbol was delisted, but we still want to account for it
-                print(f"Delisted symbol: {symbol}")
-                continue
-    else:
-        # Only currently active symbols
-        active_symbols = load_active_symbol_list()
-        for symbol in active_symbols:
-            data = CSVDataSource(f'data/{symbol}.csv')
-            all_symbols.append(data)
-
-    return all_symbols
-```
-
-## Performance Optimization
-
-### Memory Management
-
-```python
-# For large datasets, use progress callbacks and memory management
-class MemoryEfficientBacktester(SimpleBacktester):
-    def run(self, progress_bar=True, chunk_size=10000):
-        """Memory-efficient backtest execution"""
-
-        # Process data in chunks
-        total_steps = max(len(data) for data in self.strategy.data.values())
-
-        for chunk_start in range(0, total_steps, chunk_size):
-            chunk_end = min(chunk_start + chunk_size, total_steps)
-
-            # Process this chunk
-            for i in range(chunk_start, chunk_end):
-                # ... existing backtest logic ...
-
-                # Periodic garbage collection
-                if i % 1000 == 0:
-                    gc.collect()
-
-        return self._generate_report()
-```
-
-### Fast Execution Mode
-
-```python
-# Disable progress bar for faster execution
-report = backtester.run(progress_bar=False)
-
-# Use parallel optimization for parameter sweeps
-best_params, best_report, results_df = backtester.optimize_parallel(
-    params=param_ranges,
-    workers=os.cpu_count() - 1  # Use all available cores
-)
-```
-
-## Debugging Backtests
-
-### Logging and Debugging
-
-```python
-import logging
-
-class DebuggableStrategy(Strategy):
-    def __init__(self):
-        super().__init__()
-        logging.basicConfig(level=logging.DEBUG)
-        self.logger = logging.getLogger(__name__)
-
-    def next(self):
-        # Log key information
-        current_price = self.data['EURUSD'].CClose
-        position = self.positions['EURUSD'].position
-
-        self.logger.debug(f"Step {self.data['EURUSD'].current_index}: "
-                         f"Price={current_price:.5f}, Position={position}")
-
-        # Your trading logic with additional logging
-        if self.buy_signal():
-            self.logger.info(f"BUY signal at {current_price}")
-            self.positions['EURUSD'].buy(0.5)
-
-        elif self.sell_signal():
-            self.logger.info(f"SELL signal at {current_price}")
-            self.positions['EURUSD'].sell(0.5)
-```
-
-### Step-by-Step Debugging
-
-```python
-def debug_backtest(strategy, data_source, debug_points=None):
-    """Debug backtest at specific points"""
-
-    backtester = SimpleBacktester(strategy, cash=10000)
-
-    # Monkey patch to add debugging
-    original_next = strategy.next
-
-    def debug_next():
-        current_idx = strategy.data['SYMBOL'].current_index
-
-        if debug_points and current_idx in debug_points:
-            print(f"\n=== Debug Point {current_idx} ===")
-            print(f"Current Price: {strategy.data['SYMBOL'].CClose}")
-            print(f"Position: {strategy.positions['SYMBOL'].position}")
-            print(f"Cash: {strategy.positions['SYMBOL'].cash}")
-            # Add more debug info as needed
-
-            input("Press Enter to continue...")
-
-        return original_next()
-
-    strategy.next = debug_next
-    return backtester.run()
-```
-
-## Common Backtesting Pitfalls
-
-### 1. Overfitting
-
-```python
-# Avoid overfitting by using out-of-sample testing
-def avoid_overfitting(strategy_class, data):
-    """Demonstrate overfitting prevention"""
-
-    # Split data
-    train_data, test_data = split_data_for_oos(data, split_ratio=0.7)
-
-    # Optimize on training data
-    param_ranges = {'period': range(5, 50)}
-    backtester = SimpleBacktester(strategy_class(), cash=10000)
-
-    # Test on both training and test data
-    # Good performance on both indicates robust strategy
-    # Good performance on training but poor on test indicates overfitting
-```
-
-### 2. Transaction Costs
-
-```python
-# Always include realistic transaction costs
-realistic_backtester = SimpleBacktester(
-    strategy,
-    cash=10000,
-    commission=0.002,  # Realistic commission
-    commission_type=CommissionType.PERCENTAGE
-)
-
-# Compare with zero-cost backtest
-zero_cost_backtester = SimpleBacktester(
-    strategy,
-    cash=10000,
-    commission=0.0  # Unrealistic
-)
-
-realistic_report = realistic_backtester.run()
-zero_cost_report = zero_cost_backtester.run()
-
-print(f"Realistic Sharpe: {realistic_report.sharpe:.2f}")
-print(f"Zero-cost Sharpe: {zero_cost_report.sharpe:.2f}")
-```
-
-### 3. Data Snooping
-
-```python
-# Avoid data snooping by using clear methodology
-def proper_testing_methodology():
-    """Demonstrate proper testing methodology"""
-
-    # 1. Develop strategy on subset of data/markets
-    # 2. Test on different time periods
-    # 3. Test on different symbols
-    # 4. Use walk-forward analysis
-    # 5. Validate with out-of-sample data
-
-    return True
-```
-
-## Next Steps
-
-Now that you understand backtesting in QuantEx, explore these related topics:
-
-- **[Strategy Guide](./strategy.md)**: Learn how to create effective trading strategies
-- **[Execution Guide](./execution.md)**: Understand order execution and broker simulation
-- **[Optimization Guide](./optimizer.md)**: Master parameter optimization techniques
-
-For complete API reference, see the [Backtesting API documentation](../../reference/quantex.backtest.md).

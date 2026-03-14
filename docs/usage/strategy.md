@@ -1,381 +1,332 @@
-# Strategy Development Guide
+# Strategy Guide
 
-This guide covers how to create and implement trading strategies using QuantEx's strategy framework.
+This guide explains how to write a trading strategy in Quantex from the ground up.
 
-## Overview
+If you are new to the library, the most important idea is this: a strategy is just a Python class that decides what to do on each bar of historical market data.
 
-QuantEx strategies are built by inheriting from the `Strategy` base class and implementing two key methods:
+In Quantex, strategy classes inherit from [`Strategy`](../../src/quantex/strategy.py:9).
 
-- `init()`: Initialize your strategy, load data, and set up indicators
-- `next()`: Execute your trading logic for each time step
+## What a strategy is responsible for
 
-## Basic Strategy Structure
+Your strategy does three things:
+
+1. load or attach data in [`Strategy.init()`](../../src/quantex/strategy.py:52)
+2. optionally create indicator arrays with [`Strategy.Indicator()`](../../src/quantex/strategy.py:126)
+3. place orders in [`Strategy.next()`](../../src/quantex/strategy.py:71)
+
+The backtester does the rest. It advances time, updates data visibility, asks brokers to process orders, and records the equity curve through [`SimpleBacktester.run()`](../../src/quantex/backtester.py:414).
+
+## The two required methods
+
+Every concrete strategy must implement:
+
+- [`Strategy.init()`](../../src/quantex/strategy.py:52)
+- [`Strategy.next()`](../../src/quantex/strategy.py:71)
+
+### [`Strategy.init()`](../../src/quantex/strategy.py:52)
+
+This method runs once before the backtest loop starts.
+
+Use it to:
+
+- attach one or more data sources with [`Strategy.add_data()`](../../src/quantex/strategy.py:98)
+- precompute arrays
+- create time-aware indicators with [`Strategy.Indicator()`](../../src/quantex/strategy.py:126)
+- set internal state variables
+
+### [`Strategy.next()`](../../src/quantex/strategy.py:71)
+
+This method runs once per backtest step.
+
+Use it to:
+
+- read the current market state from [`Strategy.data`](../../src/quantex/strategy.py:48)
+- inspect position state from [`Strategy.positions`](../../src/quantex/strategy.py:47)
+- place orders with [`Broker.buy()`](../../src/quantex/broker.py:159), [`Broker.sell()`](../../src/quantex/broker.py:235), or [`Broker.close()`](../../src/quantex/broker.py:307)
+
+## First complete example
 
 ```python
-from quantex import Strategy, SimpleBacktester, CSVDataSource
+from quantex import Strategy, CSVDataSource, SimpleBacktester
 import pandas as pd
-import numpy as np
 
-class MyStrategy(Strategy):
-    def __init__(self, param1=10, param2=20):
+
+class MovingAverageCross(Strategy):
+    def __init__(self, fast_period=5, slow_period=20):
         super().__init__()
-        self.param1 = param1
-        self.param2 = param2
+        self.fast_period = fast_period
+        self.slow_period = slow_period
 
     def init(self):
-        # Load market data
-        data = CSVDataSource('path/to/data.csv')
-        self.add_data(data, 'SYMBOL')
+        self.add_data(CSVDataSource("data.csv"), "TEST")
 
-        # Set up indicators
-        close = self.data['SYMBOL'].Close
-        self.my_indicator = self.Indicator(self.calculate_indicator(close))
-
-    def next(self):
-        # Your trading logic here
-        if self.should_buy():
-            self.positions['SYMBOL'].buy(0.5)  # Buy with 50% of cash
-        elif self.should_sell():
-            self.positions['SYMBOL'].sell(0.5)  # Sell 50% of position
-
-    def calculate_indicator(self, prices):
-        # Custom indicator calculation
-        return pd.Series(prices).rolling(window=self.param1).mean().values
-
-    def should_buy(self):
-        # Buy signal logic
-        return self.my_indicator[-1] > self.my_indicator[-2]
-
-    def should_sell(self):
-        # Sell signal logic
-        return self.my_indicator[-1] < self.my_indicator[-2]
-```
-
-## Strategy Lifecycle
-
-### 1. Initialization (`__init__`)
-
-The constructor is called once when the strategy object is created:
-
-```python
-def __init__(self, fast_period=10, slow_period=30, symbol='EURUSD'):
-    super().__init__()
-    self.fast_period = fast_period
-    self.slow_period = slow_period
-    self.symbol = symbol
-```
-
-### 2. Setup (`init`)
-
-Called once before backtesting begins. Use this method to:
-
-- Load and register data sources
-- Initialize indicators
-- Set initial strategy state
-
-```python
-def init(self):
-    # Load data
-    data = CSVDataSource(f'data/{self.symbol}.csv')
-    self.add_data(data, self.symbol)
-
-    # Initialize indicators
-    close_prices = self.data[self.symbol].Close
-    self.fast_ma = self.Indicator(self.sma(close_prices, self.fast_period))
-    self.slow_ma = self.Indicator(self.sma(close_prices, self.slow_period))
-
-    # Strategy state
-    self.position_size = 0.1  # Use 10% of cash per trade
-```
-
-### 3. Trading Logic (`next`)
-
-Called for each time step during backtesting:
-
-```python
-def next(self):
-    # Ensure we have enough data
-    if len(self.fast_ma) < 2:
-        return
-
-    # Generate signals
-    if self.generate_buy_signal():
-        if self.positions[self.symbol].position <= 0:  # Not currently long
-            self.positions[self.symbol].buy(self.position_size)
-
-    elif self.generate_sell_signal():
-        if self.positions[self.symbol].position >= 0:  # Not currently short
-            self.positions[self.symbol].sell(self.position_size)
-
-    # Risk management
-    self.manage_risk()
-```
-
-## Working with Multiple Symbols
-
-QuantEx supports strategies that trade multiple instruments simultaneously:
-
-```python
-def init(self):
-    # Load multiple symbols
-    symbols = ['EURUSD', 'GBPUSD', 'USDJPY']
-
-    for symbol in symbols:
-        data = CSVDataSource(f'data/{symbol}.csv')
-        self.add_data(data, symbol)
-
-        # Set up symbol-specific indicators
-        close = self.data[symbol].Close
-        setattr(self, f'{symbol}_ma', self.Indicator(self.sma(close, 14)))
-
-def next(self):
-    for symbol in ['EURUSD', 'GBPUSD', 'USDJPY']:
-        if self.generate_signal(symbol):
-            self.positions[symbol].buy(0.3)  # Allocate 30% to each symbol
-```
-
-## Using Indicators
-
-### Built-in Indicator Helper
-
-Use the `Indicator` method to create time-aware indicators:
-
-```python
-def init(self):
-    close = self.data['SYMBOL'].Close
-
-    # Simple Moving Average
-    self.sma_20 = self.Indicator(self.sma(close, 20))
-
-    # Exponential Moving Average
-    self.ema_12 = self.Indicator(self.ema(close, 12))
-
-    # RSI
-    self.rsi_14 = self.Indicator(self.rsi(close, 14))
-
-def sma(self, prices, period):
-    return pd.Series(prices).rolling(window=period).mean().values
-
-def ema(self, prices, period):
-    return pd.Series(prices).ewm(span=period).mean().values
-
-def rsi(self, prices, period):
-    delta = pd.Series(prices).diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-    rs = gain / loss
-    return 100 - (100 / (1 + rs)).values
-```
-
-### Accessing Indicator Values
-
-Indicators are time-aware and only return values up to the current time step:
-
-```python
-def next(self):
-    # Current value (most recent)
-    current_sma = self.sma_20[-1]
-
-    # Previous value
-    previous_sma = self.sma_20[-2]
-
-    # Historical values (as numpy array)
-    sma_history = self.sma_20[:]
-
-    # Check for crossovers
-    if self.fast_ma[-1] > self.slow_ma[-1] and self.fast_ma[-2] <= self.slow_ma[-2]:
-        # Bullish crossover
-        self.positions['SYMBOL'].buy(0.5)
-```
-
-## Position Management
-
-### Basic Position Operations
-
-```python
-def next(self):
-    # Buy with different order types
-    self.positions['SYMBOL'].buy(0.5)                    # Market buy with 50% cash
-    self.positions['SYMBOL'].buy(0.5, limit=1.2500)     # Limit buy
-    self.positions['SYMBOL'].buy(0.5, stop_loss=1.2400) # Buy with stop loss
-
-    # Sell operations
-    self.positions['SYMBOL'].sell(0.5)                   # Market sell
-    self.positions['SYMBOL'].sell(0.5, limit=1.2600)    # Limit sell
-    self.positions['SYMBOL'].sell(0.5, take_profit=1.2700) # Sell with take profit
-
-    # Close entire position
-    self.positions['SYMBOL'].close()
-```
-
-### Position Information
-
-```python
-def next(self):
-    position = self.positions['SYMBOL']
-
-    # Position details
-    print(f"Current position: {position.position}")
-    print(f"Position value: {position.position * self.data['SYMBOL'].CClose}")
-    print(f"Available cash: {position.cash}")
-    print(f"Unrealized PnL: {position.unrealized_pnl}")
-
-    # Order management
-    print(f"Active orders: {len(position.orders)}")
-    print(f"Completed orders: {len(position.complete_orders)}")
-```
-
-## Advanced Strategy Patterns
-
-### State Management
-
-```python
-class AdvancedStrategy(Strategy):
-    def __init__(self):
-        super().__init__()
-        self.trade_count = 0
-        self.last_trade_time = None
-        self.max_trades_per_day = 3
-
-    def init(self):
-        # ... setup code ...
+        close = self.data["TEST"].Close
+        self.fast_ma = self.Indicator(
+            pd.Series(close).rolling(window=self.fast_period).mean().to_numpy()
+        )
+        self.slow_ma = self.Indicator(
+            pd.Series(close).rolling(window=self.slow_period).mean().to_numpy()
+        )
 
     def next(self):
-        # Check trading frequency limits
-        if self.should_limit_trading():
+        if len(self.fast_ma) < 2 or len(self.slow_ma) < 2:
             return
 
-        # Main trading logic
-        if self.trade_count < self.max_trades_per_day:
-            if self.buy_signal():
-                self.positions['SYMBOL'].buy(0.1)
-                self.trade_count += 1
-                self.last_trade_time = self.data['SYMBOL'].Index[self.data['SYMBOL'].current_index]
+        broker = self.positions["TEST"]
 
-    def should_limit_trading(self):
-        # Implement your trading frequency logic
-        return False
-```
+        crossed_up = self.fast_ma[-2] <= self.slow_ma[-2] and self.fast_ma[-1] > self.slow_ma[-1]
+        crossed_down = self.fast_ma[-2] >= self.slow_ma[-2] and self.fast_ma[-1] < self.slow_ma[-1]
 
-### Multi-Timeframe Strategies
+        if crossed_up and broker.is_closed():
+            broker.buy(quantity=1.0)
+        elif crossed_down and broker.is_long():
+            broker.close()
 
-```python
-def init(self):
-    # Load same symbol on different timeframes
-    daily_data = CSVDataSource('data/EURUSD_D1.csv')
-    hourly_data = CSVDataSource('data/EURUSD_H1.csv')
 
-    self.add_data(daily_data, 'EURUSD_D1')
-    self.add_data(hourly_data, 'EURUSD_H1')
-
-def next(self):
-    # Use daily trend for direction
-    daily_trend = self.get_daily_trend()
-
-    # Use hourly signals for timing
-    if daily_trend == 'bullish' and self.hourly_buy_signal():
-        self.positions['EURUSD_H1'].buy(0.3)
-```
-
-## Error Handling and Logging
-
-```python
-import logging
-
-class RobustStrategy(Strategy):
-    def __init__(self):
-        super().__init__()
-        logging.basicConfig(level=logging.INFO)
-        self.logger = logging.getLogger(__name__)
-
-    def next(self):
-        try:
-            # Your trading logic
-            if self.buy_signal():
-                self.positions['SYMBOL'].buy(0.5)
-                self.logger.info(f"Buy signal at {self.data['SYMBOL'].CClose}")
-
-        except Exception as e:
-            self.logger.error(f"Error in strategy: {e}")
-            # Decide whether to continue or stop
-            raise  # Re-raise to stop backtest
-```
-
-## Best Practices
-
-### 1. Parameter Validation
-
-```python
-def __init__(self, fast_period=10, slow_period=30):
-    super().__init__()
-
-    if fast_period >= slow_period:
-        raise ValueError("fast_period must be less than slow_period")
-
-    if fast_period < 1 or slow_period < 1:
-        raise ValueError("Periods must be positive")
-
-    self.fast_period = fast_period
-    self.slow_period = slow_period
-```
-
-### 2. Data Validation
-
-```python
-def init(self):
-    if 'SYMBOL' not in self.data:
-        raise ValueError("Data not loaded properly")
-
-    # Check for required columns
-    required_columns = ['Open', 'High', 'Low', 'Close', 'Volume']
-    for col in required_columns:
-        if col not in self.data['SYMBOL'].data.columns:
-            raise ValueError(f"Missing required column: {col}")
-```
-
-### 3. Performance Optimization
-
-```python
-def init(self):
-    # Pre-calculate expensive operations
-    self.lookback_periods = max(self.fast_period, self.slow_period) + 10
-
-def next(self):
-    # Check if we have enough data
-    if len(self.data['SYMBOL'].Close) < self.lookback_periods:
-        return
-
-    # Your optimized trading logic here
-```
-
-## Running Your Strategy
-
-```python
-# Create strategy instance
-strategy = MyStrategy(fast_period=10, slow_period=30)
-
-# Set up backtester
-backtester = SimpleBacktester(
-    strategy,
-    cash=10000,           # Starting capital
-    commission=0.002,     # 0.2% commission
-    commission_type=CommissionType.PERCENTAGE
-)
-
-# Run backtest
-report = backtester.run()
-
-# Display results
+strategy = MovingAverageCross()
+report = SimpleBacktester(strategy, cash=10_000).run()
 print(report)
 ```
 
-## Next Steps
+## Understanding the objects available inside a strategy
 
-Now that you understand the basics of strategy development, explore these related topics:
+### [`self.data`](../../src/quantex/strategy.py:48)
 
-- **[Data Sources Guide](../data-sources.md)**: Learn how to load and manage market data
-- **[Backtesting Guide](../backtesting.md)**: Master the backtesting engine
-- **[Technical Indicators Guide](../indicators.md)**: Work with built-in and custom indicators
-- **[Optimization Guide](../optimizer.md)**: Optimize your strategy parameters
+[`self.data`](../../src/quantex/strategy.py:48) is a dictionary whose keys are the symbol names you used with [`Strategy.add_data()`](../../src/quantex/strategy.py:98).
 
-For complete API reference, see the [Strategy API documentation](../../reference/quantex.strategy.md).
+Example:
+
+```python
+def init(self):
+    self.add_data(CSVDataSource("eurusd.csv"), "EURUSD")
+    self.add_data(CSVDataSource("gbpusd.csv"), "GBPUSD")
+
+def next(self):
+    eurusd_close = self.data["EURUSD"].CClose
+    gbpusd_close = self.data["GBPUSD"].CClose
+```
+
+Each value is a [`DataSource`](../../src/quantex/datasource.py:6) object.
+
+### [`self.positions`](../../src/quantex/strategy.py:47)
+
+[`self.positions`](../../src/quantex/strategy.py:47) is another dictionary keyed by the same symbol names.
+
+Each value is a [`Broker`](../../src/quantex/broker.py:113) created automatically when you call [`Strategy.add_data()`](../../src/quantex/strategy.py:98).
+
+Example:
+
+```python
+def next(self):
+    broker = self.positions["EURUSD"]
+
+    if broker.is_closed():
+        broker.buy(quantity=0.5)
+```
+
+### [`self.indicators`](../../src/quantex/strategy.py:49)
+
+[`self.indicators`](../../src/quantex/strategy.py:49) stores indicator arrays created through [`Strategy.Indicator()`](../../src/quantex/strategy.py:126).
+
+In most strategies you will also keep direct references such as `self.fast_ma` or `self.rsi`, because those are easier to read than indexing the list directly.
+
+## Reading market data
+
+The most common values you will read are:
+
+- [`DataSource.COpen`](../../src/quantex/datasource.py:145)
+- [`DataSource.CHigh`](../../src/quantex/datasource.py:155)
+- [`DataSource.CLow`](../../src/quantex/datasource.py:165)
+- [`DataSource.CClose`](../../src/quantex/datasource.py:175)
+- [`DataSource.CVolume`](../../src/quantex/datasource.py:185)
+
+These all mean “the current visible bar”.
+
+You can also access visible history with:
+
+- [`DataSource.Open`](../../src/quantex/datasource.py:90)
+- [`DataSource.High`](../../src/quantex/datasource.py:101)
+- [`DataSource.Low`](../../src/quantex/datasource.py:112)
+- [`DataSource.Close`](../../src/quantex/datasource.py:123)
+- [`DataSource.Volume`](../../src/quantex/datasource.py:134)
+
+Example:
+
+```python
+def next(self):
+    close_now = self.data["TEST"].CClose
+    previous_close = self.data["TEST"].Close[-2]
+    recent_closes = self.data["TEST"].Close[-10:]
+```
+
+## Creating indicators
+
+Quantex does not provide a built-in indicator catalogue. Instead, you calculate arrays yourself and register them as time-aware indicators.
+
+Example:
+
+```python
+import pandas as pd
+
+
+def init(self):
+    self.add_data(CSVDataSource("data.csv"), "TEST")
+    close = self.data["TEST"].Close
+
+    sma_20 = pd.Series(close).rolling(window=20).mean().to_numpy()
+    sma_50 = pd.Series(close).rolling(window=50).mean().to_numpy()
+
+    self.sma_20 = self.Indicator(sma_20)
+    self.sma_50 = self.Indicator(sma_50)
+```
+
+The returned object is a [`TimeNDArray`](../../src/quantex/helpers.py:7), which exposes only data up to the current backtest step.
+
+That lets you write logic such as:
+
+```python
+def next(self):
+    if len(self.sma_20) < 2 or len(self.sma_50) < 2:
+        return
+
+    if self.sma_20[-2] <= self.sma_50[-2] and self.sma_20[-1] > self.sma_50[-1]:
+        self.positions["TEST"].buy(quantity=0.5)
+```
+
+## Placing orders
+
+The current public order methods are:
+
+- [`Broker.buy()`](../../src/quantex/broker.py:159)
+- [`Broker.sell()`](../../src/quantex/broker.py:235)
+- [`Broker.close()`](../../src/quantex/broker.py:307)
+
+### Buy orders
+
+```python
+def next(self):
+    broker = self.positions["TEST"]
+
+    broker.buy(quantity=0.25)
+    broker.buy(quantity=0.25, limit=99.5)
+    broker.buy(quantity=0.25, stop_loss=95.0, take_profit=110.0)
+```
+
+In the current implementation of [`Broker.buy()`](../../src/quantex/broker.py:159), `quantity` is interpreted as a fraction of broker cash unless `amount` is supplied.
+
+### Sell orders
+
+```python
+def next(self):
+    broker = self.positions["TEST"]
+
+    broker.sell(quantity=0.25)
+    broker.sell(quantity=0.25, limit=105.0)
+```
+
+[`Broker.sell()`](../../src/quantex/broker.py:235) can reduce a long position or open/increase a short position, depending on the current broker state.
+
+### Closing a position
+
+```python
+def next(self):
+    broker = self.positions["TEST"]
+
+    if broker.is_long():
+        broker.close()
+```
+
+[`Broker.close()`](../../src/quantex/broker.py:307) submits a market order that offsets the current position.
+
+## Position state
+
+Useful broker attributes and helpers include:
+
+- [`Broker.position`](../../src/quantex/broker.py:143)
+- [`Broker.position_avg_price`](../../src/quantex/broker.py:144)
+- [`Broker.cash`](../../src/quantex/broker.py:145)
+- [`Broker.orders`](../../src/quantex/broker.py:151)
+- [`Broker.complete_orders`](../../src/quantex/broker.py:152)
+- [`Broker.is_long()`](../../src/quantex/broker.py:359)
+- [`Broker.is_short()`](../../src/quantex/broker.py:373)
+- [`Broker.is_closed()`](../../src/quantex/broker.py:387)
+
+Example:
+
+```python
+def next(self):
+    broker = self.positions["TEST"]
+
+    print("position", broker.position)
+    print("avg price", broker.position_avg_price)
+    print("cash", broker.cash)
+    print("pending orders", len(broker.orders))
+    print("completed orders", len(broker.complete_orders))
+```
+
+## Multi-symbol strategies
+
+Quantex can attach multiple symbols to one strategy.
+
+```python
+from quantex import Strategy, CSVDataSource
+
+
+class MultiSymbolStrategy(Strategy):
+    def init(self):
+        self.add_data(CSVDataSource("eurusd.csv"), "EURUSD")
+        self.add_data(CSVDataSource("gbpusd.csv"), "GBPUSD")
+
+    def next(self):
+        if self.data["EURUSD"].CClose > self.data["GBPUSD"].CClose:
+            self.positions["EURUSD"].buy(quantity=0.2)
+```
+
+Important detail: [`SimpleBacktester.run()`](../../src/quantex/backtester.py:443) splits starting cash evenly across all attached brokers.
+
+That means the cash available to each symbol-specific broker is a fraction of the total starting cash.
+
+## Common mistakes to avoid
+
+### 1. Forgetting to attach data
+
+If you never call [`Strategy.add_data()`](../../src/quantex/strategy.py:98), the strategy has no symbol data and no broker to trade through.
+
+### 2. Using indicator values too early
+
+Rolling calculations often contain `NaN` values at the start. Guard with length checks before using recent values.
+
+### 3. Assuming built-in indicators exist
+
+The library gives you [`Strategy.Indicator()`](../../src/quantex/strategy.py:126), but not built-in SMA, EMA, or RSI functions.
+
+### 4. Assuming orders fill at close
+
+The current broker logic in [`Broker._iterate()`](../../src/quantex/broker.py:483) executes market orders at the current open, not the current close.
+
+## Minimal debugging approach
+
+One easy way to understand a strategy is to print values inside [`Strategy.next()`](../../src/quantex/strategy.py:71):
+
+```python
+def next(self):
+    print("time", self.data["TEST"].Index[self.data["TEST"].current_index])
+    print("open", self.data["TEST"].COpen)
+    print("close", self.data["TEST"].CClose)
+    print("position", self.positions["TEST"].position)
+```
+
+## Running the strategy
+
+Once the class is written, execution is always the same pattern:
+
+```python
+strategy = MovingAverageCross(fast_period=5, slow_period=20)
+backtester = SimpleBacktester(strategy, cash=10_000)
+report = backtester.run()
+
+print(report)
+```
+
+For a deeper explanation of reports and performance metrics, see [Backtesting guide](./backtesting.md).
+

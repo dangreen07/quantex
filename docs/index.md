@@ -1,42 +1,50 @@
 # QuantEx Documentation
 
-Welcome to the **QuantEx** documentation! QuantEx is a lightweight, flexible quantitative finance library designed for building trading strategies, backtesting, and analyzing financial market data.
+QuantEx is a Python backtesting library for people who want to write trading rules and run them on historical OHLCV market data.
 
-## What is QuantEx?
+This documentation is written to match the current codebase, not an imagined future version. Where the library is intentionally small or has limitations, those limitations are stated explicitly.
 
-QuantEx provides a simple yet powerful foundation for:
+## What QuantEx is
 
-- **Strategy Development**: Create custom trading strategies using an intuitive API
-- **Data Management**: Handle historical market data from various sources
-- **Backtesting**: Test your strategies against historical data with realistic execution simulation
-- **Performance Analysis**: Comprehensive metrics and reporting for strategy evaluation
-- **Optimization**: Built-in parameter optimization with parallel processing support
+At its core, QuantEx provides four main concepts:
 
-## Key Features
+1. [`Strategy`](../src/quantex/strategy.py:9) defines your trading logic.
+2. [`DataSource`](../src/quantex/datasource.py:6) provides time-indexed market data.
+3. [`Broker`](../src/quantex/broker.py:113) manages orders, positions, and cash for each attached symbol.
+4. [`SimpleBacktester`](../src/quantex/backtester.py:356) runs the bar-by-bar simulation and can search parameter combinations.
 
-### 🚀 Lightweight & Fast
-- Minimal dependencies and overhead
-- Optimized for performance with NumPy/Pandas integration
-- Support for high-frequency data processing
+If you are new to the library, the usual workflow is:
 
-### 📊 Comprehensive Backtesting
-- Realistic order execution simulation
-- Commission and slippage modeling
-- Multiple timeframes and instruments
-- Detailed performance metrics (Sharpe ratio, max drawdown, etc.)
+- load a CSV or Parquet file into a data source
+- attach that data source to a strategy
+- create indicator arrays if needed
+- place buy, sell, or close orders inside your strategy logic
+- run the strategy through the backtester
+- inspect the resulting [`BacktestReport`](../src/quantex/backtester.py:188)
 
-### 🔧 Flexible Strategy Framework
-- Abstract base class for easy strategy implementation
-- Event-driven architecture
-- Support for multiple indicators and signals
-- Easy integration with existing pandas workflows
+## What QuantEx is not
 
-### ⚡ Parallel Optimization
-- Multi-core parameter optimization
-- Grid search and constraint-based optimization
-- Memory-efficient worker processes
+The current codebase does **not** try to be all of the following:
 
-## Quick Start
+- a live-trading framework
+- a full portfolio accounting platform
+- a large indicator library with built-in technical analysis functions
+- a feature-complete execution simulator with slippage, partial fills, or order cancellation
+
+Those distinctions matter because some older documentation implied broader functionality than the code currently implements.
+
+## Package contents
+
+The public package exports are currently defined in [`src/quantex/__init__.py`](../src/quantex/__init__.py):
+
+- [`CSVDataSource`](../src/quantex/__init__.py:1)
+- [`ParquetDataSource`](../src/quantex/__init__.py:1)
+- [`DataSource`](../src/quantex/__init__.py:1)
+- [`Strategy`](../src/quantex/__init__.py:2)
+- [`SimpleBacktester`](../src/quantex/__init__.py:3)
+- [`CommissionType`](../src/quantex/__init__.py:4)
+
+## Quick start
 
 ### Installation
 
@@ -44,124 +52,148 @@ QuantEx provides a simple yet powerful foundation for:
 pip install quantex
 ```
 
-### Basic Example
+Python version support is declared in [`pyproject.toml`](../pyproject.toml:9) as Python 3.10 or newer.
+
+### Smallest useful example
 
 ```python
-from quantex import Strategy, SimpleBacktester, CSVDataSource
+from quantex import Strategy, CSVDataSource, SimpleBacktester
 import pandas as pd
-import numpy as np
 
-class MovingAverageStrategy(Strategy):
-    def __init__(self, fast_period=10, slow_period=30):
+
+class BuyAndHold(Strategy):
+    def __init__(self):
         super().__init__()
-        self.fast_period = fast_period
-        self.slow_period = slow_period
+        self.entered = False
 
     def init(self):
-        # Load data and create indicators
-        data = CSVDataSource('data/EURUSD.csv')
-        self.add_data(data, 'EURUSD')
-
-        # Create moving averages
-        close_prices = self.data['EURUSD'].Close
-        self.fast_ma = self.Indicator(self.sma(close_prices, self.fast_period))
-        self.slow_ma = self.Indicator(self.sma(close_prices, self.slow_period))
+        self.add_data(CSVDataSource("data.csv"), "TEST")
 
     def next(self):
-        # Trading logic
-        if len(self.fast_ma) < 2:
-            return
+        if not self.entered and len(self.data["TEST"].Close) >= 2:
+            self.positions["TEST"].buy(quantity=1.0)
+            self.entered = True
 
-        # Buy signal: fast MA crosses above slow MA
-        if self.fast_ma[-1] > self.slow_ma[-1] and self.fast_ma[-2] <= self.slow_ma[-2]:
-            self.positions['EURUSD'].buy(0.5)  # Buy with 50% of available cash
 
-        # Sell signal: fast MA crosses below slow MA
-        elif self.fast_ma[-1] < self.slow_ma[-1] and self.fast_ma[-2] >= self.slow_ma[-2]:
-            self.positions['EURUSD'].sell(0.5)  # Sell 50% of position
-
-    def sma(self, series, period):
-        return pd.Series(series).rolling(window=period).mean().values
-
-# Run backtest
-strategy = MovingAverageStrategy(fast_period=10, slow_period=30)
-backtester = SimpleBacktester(strategy, cash=10000)
+strategy = BuyAndHold()
+backtester = SimpleBacktester(strategy, cash=10_000)
 report = backtester.run()
 
-print(f"Total Return: {report.total_return:.2%}")
-print(f"Sharpe Ratio: {report.sharpe:.2f}")
-print(f"Max Drawdown: {report.max_drawdown:.2%}")
+print(report)
 ```
 
-## Documentation Structure
+This example works as follows:
 
-This documentation is organized into several sections:
+- [`CSVDataSource`](../src/quantex/datasource.py:194) loads a CSV file into a [`DataSource`](../src/quantex/datasource.py:6)
+- [`Strategy.add_data()`](../src/quantex/strategy.py:98) stores the data source and creates a matching [`Broker`](../src/quantex/broker.py:113)
+- [`SimpleBacktester.run()`](../src/quantex/backtester.py:414) advances the simulation one bar at a time
+- [`Broker.buy()`](../src/quantex/broker.py:159) places an order that the broker processes on the next iteration step
 
-### 📚 [Guides](./usage/)
-Step-by-step tutorials and guides for common tasks:
+## How the backtest loop works
 
-- **[Strategies](./usage/strategy.md)**: Learn how to create and implement trading strategies
-- **[Data Sources](./usage/data-sources.md)**: Handle market data from various sources
-- **[Backtesting](./usage/backtesting.md)**: Master the backtesting engine
-- **[Execution](./usage/execution.md)**: Understand order execution simulation
-- **[Indicators](./usage/indicators.md)**: Work with technical indicators
-- **[Optimization](./usage/optimizer.md)**: Optimize strategy parameters
+Understanding the backtest loop makes the rest of the library easier to use.
 
-### 🔧 [API Reference](./reference/)
-Complete API documentation for all modules:
+When you create [`SimpleBacktester`](../src/quantex/backtester.py:356), the provided strategy is deep-copied in [`SimpleBacktester.__init__()`](../src/quantex/backtester.py:380). When you call [`SimpleBacktester.run()`](../src/quantex/backtester.py:414), the following happens:
 
-- **[Models](./reference/quantex.models.md)**: Core data models and structures
-- **[Sources](./reference/quantex.sources.md)**: Data source implementations
-- **[Strategy](./reference/quantex.strategy.md)**: Strategy framework
-- **[Engine](./reference/quantex.engine.md)**: Backtesting engine
-- **[Execution](./reference/quantex.execution.md)**: Order execution system
-- **[Backtest](./reference/quantex.backtest.md)**: Backtesting classes
-- **[Optimizer](./reference/quantex.optimizer.md)**: Optimization tools
+1. Starting cash is split evenly across all registered brokers in [`SimpleBacktester.run()`](../src/quantex/backtester.py:443).
+2. Every data source receives the current bar index by updating [`DataSource.current_index`](../src/quantex/datasource.py:62).
+3. Every broker processes pending and active orders through [`Broker._iterate()`](../src/quantex/broker.py:483).
+4. Every time-aware indicator is advanced by updating its visibility window in [`SimpleBacktester.run()`](../src/quantex/backtester.py:461).
+5. Your [`Strategy.next()`](../src/quantex/strategy.py:71) method is called.
+6. At the end, all brokers are asked to close open positions via [`Broker.close()`](../src/quantex/broker.py:307), and the combined equity curve is returned inside [`BacktestReport`](../src/quantex/backtester.py:188).
 
-## Architecture Overview
+## Data model
 
-QuantEx follows a modular architecture with clear separation of concerns:
+### Required input data
 
-```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│     Strategy    │    │   Data Source   │    │   Backtester    │
-│                 │    │                 │    │                 │
-│ • Trading Logic │◄──►│ • Market Data   │◄──►│ • Performance   │
-│ • Indicators    │    │ • OHLCV Bars    │    │ • Risk Metrics  │
-│ • Signals       │    │ • Time Series   │    │ • Optimization  │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
-        │                       │                       │
-        └───────────────────────┼───────────────────────┘
-                                │
-                       ┌─────────────────┐
-                       │     Broker      │
-                       │                 │
-                       │ • Order Mgmt    │
-                       │ • Position     │
-                       │ • PnL Tracking │
-                       └─────────────────┘
-```
+[`DataSource`](../src/quantex/datasource.py:6) requires a pandas DataFrame with these columns:
 
-## Contributing
+- `Open`
+- `High`
+- `Low`
+- `Close`
+- `Volume`
 
-We welcome contributions! Please see our [GitHub repository](https://github.com/dangreen07/quantex) for:
+That validation happens in [`DataSource.__init__()`](../src/quantex/datasource.py:32).
 
-- Bug reports and feature requests
-- Contributing guidelines
-- Development setup instructions
-- Code of conduct
+### Current bar vs historical arrays
+
+The library distinguishes between:
+
+- full visible history, such as [`DataSource.Close`](../src/quantex/datasource.py:123)
+- current-bar values, such as [`DataSource.CClose`](../src/quantex/datasource.py:175)
+
+This is important because strategies normally make decisions using the current bar and recent history, not the entire future dataset.
+
+## Orders and execution behavior
+
+The order system is defined around [`Order`](../src/quantex/broker.py:52), [`OrderSide`](../src/quantex/broker.py:11), [`OrderType`](../src/quantex/broker.py:24), and [`OrderStatus`](../src/quantex/broker.py:37).
+
+The current implementation supports:
+
+- market orders
+- limit orders
+- optional stop-loss and take-profit levels attached to an order
+- long and short positions
+- percentage commissions and cash-per-lot commissions through [`CommissionType`](../src/quantex/enums.py:4)
+
+Important implementation details from [`Broker._iterate()`](../src/quantex/broker.py:483):
+
+- market orders execute using the current bar open, via [`DataSource.COpen`](../src/quantex/datasource.py:145)
+- buy limit orders trigger when the current open is less than or equal to the limit price
+- sell limit orders trigger when the current open is greater than or equal to the limit price
+- stop-loss and take-profit monitoring also uses the current open
+- slippage is **not** modeled in the current code
+- there is no public order cancellation API
+
+## Indicators
+
+QuantEx does not ship a built-in indicator catalogue. Instead, it gives you a way to make your own indicator arrays time-aware.
+
+Use [`Strategy.Indicator()`](../src/quantex/strategy.py:126) to wrap a NumPy array in [`TimeNDArray`](../src/quantex/helpers.py:7). The wrapper makes only the currently visible portion of the array accessible during the backtest.
+
+That means you will usually calculate indicators yourself with NumPy or pandas, then register them with the strategy.
+
+## Optimization
+
+QuantEx includes two optimization entry points:
+
+- [`SimpleBacktester.optimize()`](../src/quantex/backtester.py:485)
+- [`SimpleBacktester.optimize_parallel()`](../src/quantex/backtester.py:659)
+
+Both perform grid search over candidate parameter values. The parallel version distributes combinations across worker processes and then reruns the best result locally to produce the full report.
+
+## Guides
+
+- [Strategy guide](./usage/strategy.md)
+- [Data sources guide](./usage/data-sources.md)
+- [Backtesting guide](./usage/backtesting.md)
+- [Execution guide](./usage/execution.md)
+- [Indicators guide](./usage/indicators.md)
+- [Optimization guide](./usage/optimizer.md)
+
+## API reference
+
+Reference pages live under [`docs/reference/`](./reference/).
+
+## Project structure
+
+The main source files in the current codebase are:
+
+- [`src/quantex/strategy.py`](../src/quantex/strategy.py)
+- [`src/quantex/datasource.py`](../src/quantex/datasource.py)
+- [`src/quantex/broker.py`](../src/quantex/broker.py)
+- [`src/quantex/backtester.py`](../src/quantex/backtester.py)
+- [`src/quantex/helpers.py`](../src/quantex/helpers.py)
+- [`src/quantex/enums.py`](../src/quantex/enums.py)
+
+The test suite is also a useful source of truth for documented behavior:
+
+- [`tests/test_strategy.py`](../tests/test_strategy.py)
+- [`tests/test_datasource.py`](../tests/test_datasource.py)
+- [`tests/test_broker.py`](../tests/test_broker.py)
+- [`tests/test_backtester.py`](../tests/test_backtester.py)
 
 ## License
 
-QuantEx is released under the MIT License. See [LICENSE](../LICENSE.md) for details.
-
-## Support
-
-- 📖 **Documentation**: Comprehensive guides and API reference
-- 🐛 **Issues**: Report bugs and request features on GitHub
-- 💬 **Discussions**: Join the community discussions
-- 📧 **Email**: Contact the maintainers for questions
-
----
-
-**Ready to get started?** Head over to the [Strategies guide](./usage/strategy.md) to learn how to build your first trading strategy!
+See [`LICENSE.md`](../LICENSE.md).
