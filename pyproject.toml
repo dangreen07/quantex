@@ -1,6 +1,6 @@
 [project]
 name = "quantex"
-version = "0.2.8"
+version = "0.2.9"
 description = "A simple quant strategy creation and backtesting package."
 authors = [
     {name = "Daniel Green",email = "dangreen07@outlook.com"}

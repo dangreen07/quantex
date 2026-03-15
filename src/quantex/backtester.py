@@ -428,7 +428,7 @@ class SimpleBacktester():
         self.strategy.indicators = []
 
         for data_source in self.strategy.data.values():
-            data_source.current_index = 0
+            data_source.current_index = len(data_source.data)
 
         for broker in self.strategy.positions.values():
             broker.position = np.float64(0)
@@ -483,6 +483,10 @@ class SimpleBacktester():
             broker.commision_type = self.commission_type
 
         self.strategy.init()
+
+        for data_source in self.strategy.data.values():
+            data_source.current_index = 0
+
         ## Simple backtesting loop
         for i in tqdm(range(0, max([len(i) for i in self.strategy.data.values()])), disable=(not progress_bar)):
             for val in self.strategy.data.values():
