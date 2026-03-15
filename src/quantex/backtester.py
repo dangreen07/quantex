@@ -421,6 +421,25 @@ class SimpleBacktester():
         self.margin_call = margin_call
         source = self.strategy.positions[list(self.strategy.positions.keys())[0]].source
         self.PnLRecord = np.zeros(len(source.data['Close']), dtype=np.float64)
+
+    def _reset_runtime_state(self) -> None:
+        source = self.strategy.positions[list(self.strategy.positions.keys())[0]].source
+        self.PnLRecord = np.zeros(len(source.data['Close']), dtype=np.float64)
+        self.strategy.indicators = []
+
+        for data_source in self.strategy.data.values():
+            data_source.current_index = 0
+
+        for broker in self.strategy.positions.values():
+            broker.position = np.float64(0)
+            broker.position_avg_price = np.float64(0)
+            broker.cash = np.float64(0)
+            broker.orders = []
+            broker.complete_orders = []
+            broker._i = 0
+            broker.PnLRecord = np.full(len(broker.source.data['Close']), self.cash, dtype=np.float64)
+            broker.cashRecord = []
+
     def run(self, progress_bar: bool = False) -> BacktestReport:
         """
         Execute the backtest for the configured strategy.
@@ -446,6 +465,8 @@ class SimpleBacktester():
             should not be called multiple times on the same instance
             without resetting.
         """
+        self._reset_runtime_state()
+
         # Distribute the initial portfolio cash evenly across all symbols so that
         # the aggregate starting equity equals `self.cash`, regardless of the
         # number of data sources attached to the strategy. This avoids

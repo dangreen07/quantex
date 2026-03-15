@@ -19,7 +19,10 @@ class BollingerBandsStrategy(Strategy):
         self.resid_log = self.Indicator(resid_log)
     
     def next(self):
-        zscore = (self.resid_log - self.resid_log.mean()) / self.resid_log.std(ddof=0)
+        resid_std = self.resid_log.std(ddof=0)
+        if np.isnan(resid_std) or resid_std == 0:
+            return
+        zscore = (self.resid_log - self.resid_log.mean()) / resid_std
         if zscore[-1] >= 1.5 and (self.positions['A'].is_closed() or self.positions['A'].is_short()):
             self.positions['B'].sell(0.5)
             self.positions['A'].buy(0.5)
