@@ -242,10 +242,20 @@ class BacktestReport:
             elif trade < 0:
                 total_losses += abs(trade)
                 losing += 1
+        if winning + losing == 0:
+            return 0.0
+        if winning == 0:
+            return 0.0
+        if losing == 0:
+            return 1.0
         W = winning / (winning + losing)
         avg_win = total_wins / winning
         avg_loss = total_losses / losing
+        if avg_loss == 0:
+            return 0.0
         R = avg_win / avg_loss
+        if R == 0:
+            return 0.0
         kelly = W - (1 - W) / R
         return kelly
 
