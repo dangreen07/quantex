@@ -76,6 +76,7 @@ class Order:
     take_profit: np.float64 | None
     status: OrderStatus
     timestamp: datetime
+    reduce_only: bool = False
 
 
 def same_sign(num1, num2):
@@ -150,10 +151,43 @@ class Broker:
         self.share_decimals = 1
         self.orders: list[Order] = []
         self.complete_orders = []
+        self.active_order: Order | None = None
+        self.pending_close_order: Order | None = None
         self._i = 0
         self.source = source
         self.PnLRecord = np.full(len(self.source.data['Close']), self.cash, dtype=np.float64)
         self.cashRecord = []
+
+    def _enqueue_order(self, order: Order) -> None:
+        """
+        Add an order while keeping the active-order queue compact.
+
+        The broker logic only meaningfully supports a single active protective
+        order for the current open position. Replacing stale active orders keeps
+        per-bar iteration bounded and prevents pathological queue growth.
+        """
+        if order.reduce_only:
+            if self.pending_close_order is not None:
+                try:
+                    self.orders.remove(self.pending_close_order)
+                except ValueError:
+                    pass
+            self.pending_close_order = order
+            self.orders.append(order)
+            return
+
+        if order.status == OrderStatus.PENDING and order.stop_loss is None and order.take_profit is None:
+            self.orders.append(order)
+            return
+
+        if self.active_order is not None:
+            try:
+                self.orders.remove(self.active_order)
+            except ValueError:
+                pass
+            self.active_order = None
+
+        self.orders.append(order)
 
     @final
     def buy(self, quantity: float = 1, limit: np.float64 | None = None, amount: np.float64 | None = None, stop_loss: np.float64 | None = None, take_profit: np.float64 | None = None):
@@ -228,7 +262,7 @@ class Broker:
             timestamp=self.source.Index[self._i]
             )
         ## Transmit the order
-        self.orders.append(order)
+        self._enqueue_order(order)
             
 
     @final
@@ -301,7 +335,7 @@ class Broker:
             timestamp=self.source.Index[self._i]
             )
         ## Transmit the order
-        self.orders.append(order)
+        self._enqueue_order(order)
     
     @final
     def close(self):
@@ -340,9 +374,10 @@ class Broker:
                 stop_loss=None,
                 take_profit=None,
                 status=OrderStatus.PENDING,
-                timestamp=self.source.Index[self._i]
+                timestamp=self.source.Index[self._i],
+                reduce_only=True,
                 )
-            self.orders.append(order)
+            self._enqueue_order(order)
         elif (self.position < 0):
             order = Order(
                 side=OrderSide.BUY, 
@@ -352,9 +387,10 @@ class Broker:
                 stop_loss=None,
                 take_profit=None,
                 status=OrderStatus.PENDING,
-                timestamp=self.source.Index[self._i]
+                timestamp=self.source.Index[self._i],
+                reduce_only=True,
                 )
-            self.orders.append(order)
+            self._enqueue_order(order)
     
     def is_long(self):
         """
@@ -545,6 +581,7 @@ class Broker:
                                 self.position = new_pos
                         if (order.stop_loss or order.take_profit):
                             order.status = OrderStatus.ACTIVE ## Will need to be checked on for each update
+                            self.active_order = order
                         else:
                             order.status = OrderStatus.COMPLETE ## We are done with it
                             to_delete.append(order)
@@ -580,6 +617,7 @@ class Broker:
                                 self.position = new_pos
                             if (order.stop_loss or order.take_profit):
                                 order.status = OrderStatus.ACTIVE
+                                self.active_order = order
                             else:
                                 order.status = OrderStatus.COMPLETE
                                 self.complete_orders.append(order)
@@ -601,10 +639,13 @@ class Broker:
                                 stop_loss= None, 
                                 take_profit= None, 
                                 status=OrderStatus.PENDING,
-                                timestamp=self.source.Index[self._i]
+                                timestamp=self.source.Index[self._i],
+                                reduce_only=True,
                                 )
-                            self.orders.append(close_order)
+                            self._enqueue_order(close_order)
                             order.status = OrderStatus.COMPLETE
+                            if self.active_order is order:
+                                self.active_order = None
                             self.complete_orders.append(order)
                             to_delete.append(order)
                     elif(order.side == OrderSide.SELL
@@ -620,14 +661,19 @@ class Broker:
                                 stop_loss=None,
                                 take_profit=None,
                                 status=OrderStatus.PENDING,
-                                timestamp=self.source.Index[self._i]
+                                timestamp=self.source.Index[self._i],
+                                reduce_only=True,
                             )
-                            self.orders.append(close_order)
+                            self._enqueue_order(close_order)
                             order.status = OrderStatus.COMPLETE
+                            if self.active_order is order:
+                                self.active_order = None
                             self.complete_orders.append(order)
                             to_delete.append(order)
         for item in to_delete:
             self.orders.remove(item)
+            if self.pending_close_order is item:
+                self.pending_close_order = None
         unrealized = self.position * self.source.CClose
         equity = self.cash + unrealized
         margin_call = self.margin_call * abs(self.position) * self.source.CClose
