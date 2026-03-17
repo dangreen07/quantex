@@ -453,9 +453,12 @@ def trix(values: ArrayLike, period: int = 15) -> np.ndarray:
     if len(ema2_idx) < period:
         return result
     ema3 = _ema_from_array(ema2[ema2_idx], period)
-    start = ema1_idx[0] + ema2_idx[0] + (period - 1) + (period - 1)
+    ema3_idx = np.where(~np.isnan(ema3))[0]
+    if len(ema3_idx) == 0:
+        return result
+    start = ema1_idx[0] + ema2_idx[0] + ema3_idx[0]
     aligned = _nan_array(len(array))
-    aligned[start:] = ema3[period - 1 :]
+    aligned[start:] = ema3[ema3_idx[0] :]
     with np.errstate(divide="ignore", invalid="ignore"):
         result[1:] = ((aligned[1:] - aligned[:-1]) / aligned[:-1]) * 100.0
     return result
