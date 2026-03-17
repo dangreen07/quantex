@@ -4,6 +4,7 @@ import numpy as np
 from .broker import Broker
 from .datasource import DataSource
 from .helpers import TimeNDArray
+from .indicators import indicators as builtin_indicators
 
 
 class Strategy(ABC):
@@ -47,6 +48,7 @@ class Strategy(ABC):
         self.positions: dict[str, Broker] = {}
         self.data: dict[str, DataSource] = {}
         self.indicators: list[TimeNDArray] = []
+        self.ta = builtin_indicators
     
     @abstractmethod
     def init(self):

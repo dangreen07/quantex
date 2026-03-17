@@ -1,240 +1,215 @@
 # Indicators Guide
 
-This guide explains how indicators work in Quantex.
+Quantex now includes a built-in technical indicator catalog for common stock-trading workflows and more advanced quantitative studies.
 
-The most important correction to earlier documentation is simple: Quantex does not currently ship a built-in library of indicator functions. Instead, it provides a mechanism for making your own arrays time-aware during backtesting.
+You can access the catalog in two ways:
 
-That mechanism is [`Strategy.Indicator()`](../../src/quantex/strategy.py:126), which wraps a NumPy array in [`TimeNDArray`](../../src/quantex/helpers.py:7).
+- package level: [`quantex.indicators`](../../src/quantex/indicators.py)
+- strategy level: `self.ta` from [`Strategy.__init__()`](../../src/quantex/strategy.py:40)
 
-## What [`Strategy.Indicator()`](../../src/quantex/strategy.py:126) does
+Every indicator returns NumPy arrays. To make those arrays time-aware during a backtest, register them with [`Strategy.Indicator()`](../../src/quantex/strategy.py:126).
 
-When you call [`Strategy.Indicator()`](../../src/quantex/strategy.py:126):
-
-1. your input array is converted to [`TimeNDArray`](../../src/quantex/helpers.py:7)
-2. the time-aware array is appended to [`Strategy.indicators`](../../src/quantex/strategy.py:49)
-3. the same object is returned so you can store it on `self`
-
-Example:
-
-```python
-import pandas as pd
-
-
-def init(self):
-    close = self.data["TEST"].Close
-    sma = pd.Series(close).rolling(window=20).mean().to_numpy()
-    self.sma_20 = self.Indicator(sma)
-```
-
-## Why time-aware arrays matter
-
-During a backtest, future bars should not be visible to the strategy.
-
-[`TimeNDArray`](../../src/quantex/helpers.py:7) enforces this by keeping an internal visibility index. On each backtest step, [`SimpleBacktester.run()`](../../src/quantex/backtester.py:461) advances that visible window for every registered indicator.
-
-That means:
-
-- `indicator[-1]` means the latest currently visible value
-- `indicator[-2]` means the previous visible value
-- slices such as `indicator[-10:]` only expose visible history
-
-## First complete example
+## Quick start
 
 ```python
 from quantex import Strategy, CSVDataSource
-import pandas as pd
 
 
-class SmaStrategy(Strategy):
+class MomentumTrendStrategy(Strategy):
     def init(self):
         self.add_data(CSVDataSource("data.csv"), "TEST")
+        source = self.data["TEST"]
 
-        close = self.data["TEST"].Close
-        self.sma_10 = self.Indicator(
-            pd.Series(close).rolling(window=10).mean().to_numpy()
-        )
-        self.sma_20 = self.Indicator(
-            pd.Series(close).rolling(window=20).mean().to_numpy()
-        )
+        self.sma_20 = self.Indicator(self.ta.sma(source.Close, 20))
+        self.ema_50 = self.Indicator(self.ta.ema(source.Close, 50))
+        self.rsi_14 = self.Indicator(self.ta.rsi(source.Close, 14))
+
+        macd_line, macd_signal, macd_hist = self.ta.macd(source.Close)
+        self.macd_line = self.Indicator(macd_line)
+        self.macd_signal = self.Indicator(macd_signal)
+        self.macd_hist = self.Indicator(macd_hist)
 
     def next(self):
-        if len(self.sma_10) < 2 or len(self.sma_20) < 2:
+        if len(self.sma_20) < 2 or len(self.macd_signal) < 2:
             return
 
-        if self.sma_10[-2] <= self.sma_20[-2] and self.sma_10[-1] > self.sma_20[-1]:
+        bullish_cross = self.macd_line[-2] <= self.macd_signal[-2] and self.macd_line[-1] > self.macd_signal[-1]
+        if bullish_cross and self.rsi_14[-1] < 70:
             self.positions["TEST"].buy(quantity=0.5)
 ```
 
-## Building indicators with pandas or NumPy
+## Indicator categories
 
-The usual pattern is:
+### Moving averages and trend filters
 
-1. take a visible historical array such as [`DataSource.Close`](../../src/quantex/datasource.py:123)
-2. compute an indicator array with pandas or NumPy
-3. register it with [`Strategy.Indicator()`](../../src/quantex/strategy.py:126)
+- `sma(values, period)`
+- `ema(values, period)`
+- `wma(values, period)`
+- `dema(values, period)`
+- `tema(values, period)`
+- `kama(values, er_period=10, fast_period=2, slow_period=30)`
+- `linear_regression_slope(values, period=20)`
 
-### Simple moving average
+### Momentum and oscillators
+
+- `momentum(values, period=1)`
+- `roc(values, period=1)`
+- `rsi(values, period=14)`
+- `stochastic_oscillator(high, low, close, k_period=14, d_period=3)`
+- `cci(high, low, close, period=20)`
+- `williams_r(high, low, close, period=14)`
+- `macd(values, fast_period=12, slow_period=26, signal_period=9)`
+- `trix(values, period=15)`
+- `ultimate_oscillator(high, low, close, short_period=7, medium_period=14, long_period=28)`
+- `fisher_transform(values, period=10)`
+
+### Volatility and channel indicators
+
+- `true_range(high, low, close)`
+- `atr(high, low, close, period=14)`
+- `volatility(values, period, ddof=0)`
+- `bollinger_bands(values, period=20, std_dev=2.0)`
+- `keltner_channels(high, low, close, ema_period=20, atr_period=10, multiplier=2.0)`
+- `donchian_channels(high, low, period=20)`
+
+### Volume and trend-strength indicators
+
+- `obv(close, volume)`
+- `mfi(high, low, close, volume, period=14)`
+- `adx(high, low, close, period=14)`
+- `aroon(high, low, period=25)`
+- `vortex(high, low, close, period=14)`
+
+### Advanced and research-oriented indicators
+
+- `ichimoku_cloud(high, low, close, conversion_period=9, base_period=26, span_b_period=52, displacement=26)`
+- `zscore(values, period=20)`
+- `sharpe_ratio(values, period=20, risk_free_rate=0.0)`
+- `sortino_ratio(values, period=20, target_return=0.0)`
+- `hurst_exponent(values, period=100)`
+
+## Multi-output indicators
+
+Some indicators return several arrays. Register each returned series separately if you want time-aware access in `next()`.
+
+### MACD
 
 ```python
-close = self.data["TEST"].Close
-self.sma_20 = self.Indicator(
-    pd.Series(close).rolling(window=20).mean().to_numpy()
+macd_line, macd_signal, macd_hist = self.ta.macd(self.data["TEST"].Close)
+self.macd_line = self.Indicator(macd_line)
+self.macd_signal = self.Indicator(macd_signal)
+self.macd_hist = self.Indicator(macd_hist)
+```
+
+### Bollinger Bands
+
+```python
+lower, middle, upper = self.ta.bollinger_bands(self.data["TEST"].Close, period=20)
+self.bb_lower = self.Indicator(lower)
+self.bb_middle = self.Indicator(middle)
+self.bb_upper = self.Indicator(upper)
+```
+
+### ADX and directional indicators
+
+```python
+adx, plus_di, minus_di = self.ta.adx(
+    self.data["TEST"].High,
+    self.data["TEST"].Low,
+    self.data["TEST"].Close,
+)
+self.adx = self.Indicator(adx)
+self.plus_di = self.Indicator(plus_di)
+self.minus_di = self.Indicator(minus_di)
+```
+
+### Ichimoku Cloud
+
+```python
+conversion, base, span_a, span_b, lagging = self.ta.ichimoku_cloud(
+    self.data["TEST"].High,
+    self.data["TEST"].Low,
+    self.data["TEST"].Close,
 )
 ```
 
-### Exponential moving average
+## Time-aware behavior
+
+[`Strategy.Indicator()`](../../src/quantex/strategy.py:126) converts a plain NumPy array into [`TimeNDArray`](../../src/quantex/helpers.py:7), which hides future values during the backtest loop.
+
+That means:
+
+- `indicator[-1]` is the latest visible value
+- `indicator[-2]` is the prior visible value
+- `indicator[-5:]` only exposes visible history
+
+This keeps built-in indicators safe to use in the same way as custom arrays.
+
+## Combining built-in and custom indicators
+
+You can mix built-in indicators with your own NumPy calculations.
 
 ```python
 close = self.data["TEST"].Close
-self.ema_20 = self.Indicator(
-    pd.Series(close).ewm(span=20).mean().to_numpy()
+returns = np.diff(close, prepend=close[0]) / close[0]
+
+self.custom_signal = self.Indicator(returns.cumsum())
+self.atr_14 = self.Indicator(
+    self.ta.atr(self.data["TEST"].High, self.data["TEST"].Low, close, 14)
 )
 ```
 
-### RSI
+## Notes on inputs and outputs
+
+- single-series indicators expect a one-dimensional array-like input
+- OHLC-based indicators require same-length `high`, `low`, and `close` arrays
+- volume indicators require `volume` with the same length as price data
+- rolling indicators begin with `NaN` values until enough history exists
+
+## Typical trading patterns
+
+### Trend-following crossover
 
 ```python
-close = self.data["TEST"].Close
-delta = pd.Series(close).diff()
-gain = delta.where(delta > 0, 0).rolling(window=14).mean()
-loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-rs = gain / loss
-
-self.rsi_14 = self.Indicator((100 - (100 / (1 + rs))).to_numpy())
+fast = self.Indicator(self.ta.ema(self.data["TEST"].Close, 20))
+slow = self.Indicator(self.ta.ema(self.data["TEST"].Close, 50))
 ```
 
-## Accessing indicator values
-
-The returned object behaves like an array with time-aware bounds.
-
-Example:
+### Mean reversion
 
 ```python
-def next(self):
-    current_value = self.sma_20[-1]
-    previous_value = self.sma_20[-2]
-    recent_values = self.sma_20[-5:]
+zscore = self.Indicator(self.ta.zscore(self.data["TEST"].Close, 20))
+bb_lower, bb_mid, bb_upper = self.ta.bollinger_bands(self.data["TEST"].Close, 20)
 ```
 
-This behavior comes from [`TimeNDArray.__getitem__()`](../../src/quantex/helpers.py:180) and [`TimeNDArray.__len__()`](../../src/quantex/helpers.py:118).
-
-## Avoiding common mistakes
-
-### 1. Reading too early
-
-Many rolling indicators begin with `NaN` values. Guard with length checks before using the newest values.
+### Breakout systems
 
 ```python
-def next(self):
-    if len(self.sma_20) < 2:
-        return
+donchian_lower, donchian_mid, donchian_upper = self.ta.donchian_channels(
+    self.data["TEST"].High,
+    self.data["TEST"].Low,
+    20,
+)
 ```
 
-### 2. Assuming indicators are updated automatically from formulas
-
-The array visibility is updated automatically, but the numerical values are whatever you computed up front. If you want a different indicator formula, you must create that array yourself.
-
-### 3. Assuming Quantex provides built-in functions such as `self.sma()`
-
-The current [`Strategy`](../../src/quantex/strategy.py:9) base class does not define `sma`, `ema`, `rsi`, or similar helpers. If you use those names, they must be your own methods or external functions.
-
-## Multi-indicator example
+### Regime filtering
 
 ```python
-from quantex import Strategy, CSVDataSource
-import pandas as pd
-
-
-class MultiIndicatorStrategy(Strategy):
-    def init(self):
-        self.add_data(CSVDataSource("data.csv"), "TEST")
-        close = self.data["TEST"].Close
-
-        self.sma_10 = self.Indicator(pd.Series(close).rolling(10).mean().to_numpy())
-        self.sma_30 = self.Indicator(pd.Series(close).rolling(30).mean().to_numpy())
-        self.volatility = self.Indicator(pd.Series(close).pct_change().rolling(20).std().to_numpy())
-
-    def next(self):
-        if len(self.sma_10) < 2 or len(self.sma_30) < 2:
-            return
-
-        broker = self.positions["TEST"]
-
-        bullish_cross = self.sma_10[-2] <= self.sma_30[-2] and self.sma_10[-1] > self.sma_30[-1]
-        bearish_cross = self.sma_10[-2] >= self.sma_30[-2] and self.sma_10[-1] < self.sma_30[-1]
-
-        if bullish_cross and broker.is_closed():
-            broker.buy(quantity=0.25)
-        elif bearish_cross and broker.is_long():
-            broker.close()
+adx, plus_di, minus_di = self.ta.adx(
+    self.data["TEST"].High,
+    self.data["TEST"].Low,
+    self.data["TEST"].Close,
+    14,
+)
+hurst = self.ta.hurst_exponent(self.data["TEST"].Close, 100)
 ```
-
-## Using indicators with multiple symbols
-
-```python
-def init(self):
-    self.add_data(CSVDataSource("eurusd.csv"), "EURUSD")
-    self.add_data(CSVDataSource("gbpusd.csv"), "GBPUSD")
-
-    self.eurusd_sma = self.Indicator(
-        pd.Series(self.data["EURUSD"].Close).rolling(20).mean().to_numpy()
-    )
-    self.gbpusd_sma = self.Indicator(
-        pd.Series(self.data["GBPUSD"].Close).rolling(20).mean().to_numpy()
-    )
-```
-
-## Using indicators with multi-timeframe data
-
-Quantex lets you attach multiple sources, so you can compute indicators from different files or timeframes.
-
-```python
-def init(self):
-    self.add_data(CSVDataSource("eurusd_m1.csv"), "EURUSD_M1")
-    self.add_data(CSVDataSource("eurusd_h1.csv"), "EURUSD_H1")
-
-    self.m1_sma = self.Indicator(
-        pd.Series(self.data["EURUSD_M1"].Close).rolling(20).mean().to_numpy()
-    )
-    self.h1_sma = self.Indicator(
-        pd.Series(self.data["EURUSD_H1"].Close).rolling(50).mean().to_numpy()
-    )
-```
-
-Be careful here: Quantex does not provide special synchronization logic beyond advancing each source index during the backtest loop. If your files have different lengths or timestamp structures, strategy logic must account for that.
-
-## Indicator debugging
-
-Printing a few values from inside [`Strategy.next()`](../../src/quantex/strategy.py:71) is often enough to confirm indicator behavior.
-
-```python
-def next(self):
-    if len(self.sma_20) < 2:
-        return
-
-    print(self.data["TEST"].Index[self.data["TEST"].current_index])
-    print("price", self.data["TEST"].CClose)
-    print("sma", self.sma_20[-1])
-```
-
-## What the current indicator system does not include
-
-The current codebase does **not** include:
-
-- a built-in technical indicator module
-- automatic plotting helpers
-- automatic indicator parameter optimization helpers
-- a dictionary-based indicator manager on the base [`Strategy`](../../src/quantex/strategy.py:9)
-
-Earlier documentation included many conceptual examples of those ideas, but they are not part of the current implementation.
 
 ## Summary
 
-Use indicators in Quantex like this:
+Use built-in indicators in Quantex like this:
 
-1. compute a NumPy array with pandas or NumPy
-2. register it with [`Strategy.Indicator()`](../../src/quantex/strategy.py:126)
-3. access only the visible portion during [`Strategy.next()`](../../src/quantex/strategy.py:71)
+1. compute arrays with `self.ta` or `quantex.indicators`
+2. wrap each series with [`Strategy.Indicator()`](../../src/quantex/strategy.py:126)
+3. read only visible values inside [`Strategy.next()`](../../src/quantex/strategy.py:71)
 
-For strategy structure, see [Strategy guide](./strategy.md). For parameter search, see [Optimization guide](./optimizer.md).
-
+For broader strategy design, see [Strategy guide](./strategy.md) and [Backtesting guide](./backtesting.md).

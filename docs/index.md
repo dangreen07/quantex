@@ -28,7 +28,7 @@ The current codebase does **not** try to be all of the following:
 
 - a live-trading framework
 - a full portfolio accounting platform
-- a large indicator library with built-in technical analysis functions
+- a live execution stack or portfolio analytics platform beyond backtesting
 - a feature-complete execution simulator with slippage, partial fills, or order cancellation
 
 Those distinctions matter because some older documentation implied broader functionality than the code currently implements.
@@ -43,6 +43,7 @@ The public package exports are currently defined in [`src/quantex/__init__.py`](
 - [`Strategy`](../src/quantex/__init__.py:2)
 - [`SimpleBacktester`](../src/quantex/__init__.py:3)
 - [`CommissionType`](../src/quantex/__init__.py:4)
+- [`indicators`](../src/quantex/__init__.py:5)
 
 ## Quick start
 
@@ -148,11 +149,11 @@ Important implementation details from [`Broker._iterate()`](../src/quantex/broke
 
 ## Indicators
 
-QuantEx does not ship a built-in indicator catalogue. Instead, it gives you a way to make your own indicator arrays time-aware.
+QuantEx ships a built-in indicator catalogue through [`quantex.indicators`](../src/quantex/indicators.py) and the strategy-level convenience handle `self.ta` created in [`Strategy.__init__()`](../src/quantex/strategy.py:40).
 
-Use [`Strategy.Indicator()`](../src/quantex/strategy.py:126) to wrap a NumPy array in [`TimeNDArray`](../src/quantex/helpers.py:7). The wrapper makes only the currently visible portion of the array accessible during the backtest.
+The indicator module includes common stock-trading studies such as moving averages, RSI, MACD, Bollinger Bands, ATR, stochastic oscillator, CCI, Williams %R, OBV, MFI, ADX, Keltner Channels, Donchian Channels, Aroon, and Vortex, plus more advanced tools such as Ichimoku Cloud, KAMA, TRIX, Fisher Transform, Hurst exponent, rolling Sharpe/Sortino ratios, Z-score, and linear regression slope.
 
-That means you will usually calculate indicators yourself with NumPy or pandas, then register them with the strategy.
+Use [`Strategy.Indicator()`](../src/quantex/strategy.py:126) to wrap any returned NumPy array in [`TimeNDArray`](../src/quantex/helpers.py:7). The wrapper makes only the currently visible portion of the array accessible during the backtest.
 
 ## Optimization
 

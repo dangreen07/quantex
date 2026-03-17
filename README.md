@@ -26,7 +26,7 @@ At runtime, a typical Quantex workflow looks like this:
 
 1. Create a strategy class by inheriting from [`Strategy`](src/quantex/strategy.py:9).
 2. In [`Strategy.init()`](src/quantex/strategy.py:52), attach one or more data sources with [`Strategy.add_data()`](src/quantex/strategy.py:98).
-3. Still in [`Strategy.init()`](src/quantex/strategy.py:52), build indicator arrays with [`Strategy.Indicator()`](src/quantex/strategy.py:126).
+3. Still in [`Strategy.init()`](src/quantex/strategy.py:52), build indicator arrays with the built-in indicator catalog on `self.ta` or the package-level [`indicators`](src/quantex/indicators.py), then register them with [`Strategy.Indicator()`](src/quantex/strategy.py:126).
 4. In [`Strategy.next()`](src/quantex/strategy.py:71), read the current bar through properties such as [`DataSource.COpen`](src/quantex/datasource.py:145) and [`DataSource.CClose`](src/quantex/datasource.py:175), then place orders through the broker stored in [`Strategy.positions`](src/quantex/strategy.py:47).
 5. Run the strategy with [`SimpleBacktester.run()`](src/quantex/backtester.py:414).
 6. Inspect the returned [`BacktestReport`](src/quantex/backtester.py:188), including [`BacktestReport.total_return`](src/quantex/backtester.py:227), [`BacktestReport.periods_per_year`](src/quantex/backtester.py:214), [`BacktestReport.plot()`](src/quantex/backtester.py:252), and the printable summary from [`BacktestReport.__str__()`](src/quantex/backtester.py:299).
@@ -74,12 +74,8 @@ class MovingAverageCross(Strategy):
         self.add_data(data, "TEST")
 
         close = self.data["TEST"].Close
-        self.fast_ma = self.Indicator(
-            pd.Series(close).rolling(window=self.fast_period).mean().to_numpy()
-        )
-        self.slow_ma = self.Indicator(
-            pd.Series(close).rolling(window=self.slow_period).mean().to_numpy()
-        )
+        self.fast_ma = self.Indicator(self.ta.sma(close, self.fast_period))
+        self.slow_ma = self.Indicator(self.ta.sma(close, self.slow_period))
 
     def next(self):
         if len(self.fast_ma) < 2 or len(self.slow_ma) < 2:
@@ -146,7 +142,35 @@ Your strategy is a class that implements two methods:
 
 ### Indicators
 
-[`Strategy.Indicator()`](src/quantex/strategy.py:126) wraps a NumPy array in [`TimeNDArray`](src/quantex/helpers.py:7), which only exposes data up to the current bar. That helps you avoid accidentally reading future values if you index indicators correctly.
+[`Strategy`](src/quantex/strategy.py:9) now exposes a built-in technical analysis catalog at `self.ta`, and the package exports the same catalog as [`quantex.indicators`](src/quantex/indicators.py).
+
+Included indicators cover trend, momentum, volatility, volume, and more advanced studies, including:
+
+- moving averages: `sma`, `ema`, `wma`, `dema`, `tema`, `kama`
+- momentum and oscillators: `rsi`, `stochastic_oscillator`, `cci`, `williams_r`, `roc`, `momentum`, `trix`, `fisher_transform`, `ultimate_oscillator`
+- volatility and channels: `atr`, `bollinger_bands`, `keltner_channels`, `donchian_channels`, `volatility`
+- volume and trend strength: `obv`, `mfi`, `adx`, `aroon`, `vortex`
+- advanced and research-oriented tools: `ichimoku_cloud`, `zscore`, `sharpe_ratio`, `sortino_ratio`, `hurst_exponent`, `linear_regression_slope`
+
+[`Strategy.Indicator()`](src/quantex/strategy.py:126) still wraps each NumPy array in [`TimeNDArray`](src/quantex/helpers.py:7), which only exposes data up to the current bar.
+
+Example:
+
+```python
+from quantex import Strategy, CSVDataSource, SimpleBacktester
+
+
+class MacdTrendStrategy(Strategy):
+    def init(self):
+        self.add_data(CSVDataSource("data.csv"), "TEST")
+        close = self.data["TEST"].Close
+
+        self.ema_20 = self.Indicator(self.ta.ema(close, 20))
+        self.rsi_14 = self.Indicator(self.ta.rsi(close, 14))
+        macd_line, macd_signal, _ = self.ta.macd(close)
+        self.macd_line = self.Indicator(macd_line)
+        self.macd_signal = self.Indicator(macd_signal)
+```
 
 ### Broker and orders
 
@@ -206,4 +230,3 @@ Tests in [`tests/test_backtester.py`](tests/test_backtester.py), [`tests/test_br
 ## License
 
 See [`LICENSE.md`](LICENSE.md).
-
