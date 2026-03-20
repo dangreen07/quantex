@@ -1,0 +1,56 @@
+.md-typeset details.quote {
+  display: block !important;
+}
+
+.md-typeset details.quote > summary {
+  display: block !important;
+}
+
+.md-typeset details.quote[open] > *:not(summary) {
+  display: block !important;
+}
+
+.md-typeset details.quote > *:not(summary) {
+  display: block !important;
+}
+
+.md-typeset details.quote .highlight,
+.md-typeset details.quote pre,
+.md-typeset details.quote code,
+.md-typeset .doc .highlight,
+.md-typeset .doc pre {
+  visibility: visible !important;
+  overflow: visible !important;
+  max-height: none !important;
+}
+
+@media print {
+  .md-typeset details,
+  .md-typeset details.quote,
+  .md-typeset details.quote > summary,
+  .md-typeset details.quote > * {
+    display: block !important;
+    visibility: visible !important;
+  }
+
+  .md-typeset details.quote > summary {
+    margin-bottom: 0.5rem;
+  }
+
+  .md-typeset details.quote .highlight,
+  .md-typeset details.quote .highlighttable,
+  .md-typeset details.quote .linenodiv,
+  .md-typeset details.quote pre,
+  .md-typeset details.quote code,
+  .md-typeset .doc .highlight,
+  .md-typeset .doc pre {
+    display: block !important;
+    visibility: visible !important;
+    overflow: visible !important;
+    max-height: none !important;
+    break-inside: avoid;
+    page-break-inside: avoid;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+}

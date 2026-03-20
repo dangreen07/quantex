@@ -1,5 +1,7 @@
 site_name: QuantEx
 site_description: Documentation for QuantEx
+extra_css:
+  - stylesheets/pdf-overrides.css
 theme:
   name: material
   palette:
@@ -37,6 +39,7 @@ nav:
       - Strategy: reference/strategy.md
 plugins:
   - search
+  - to-pdf
   - mkdocstrings:
       handlers:
         python:
@@ -45,5 +48,6 @@ plugins:
             - ./src
           options:
             docstring_style: google
+            show_source: false
   - mermaid2
   - print-site
