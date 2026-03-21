@@ -14,7 +14,7 @@ The project is intentionally small. It does not try to be a full research platfo
 
 ## Installation
 
-Quantex requires Python 3.10 or newer and is published as [`quantex`](pyproject.toml).
+Quantex requires Python 3.11 or newer and is published as [`quantex`](pyproject.toml).
 
 ```bash
 pip install quantex
