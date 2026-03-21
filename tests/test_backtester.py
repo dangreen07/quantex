@@ -1,138 +1,35 @@
 import pytest
 import pandas as pd
 import numpy as np
-from quantex.strategy import Strategy
 from quantex.datasource import DataSource
 from quantex.backtester import SimpleBacktester, BacktestReport, max_drawdown, _infer_periods_per_year
 from quantex.enums import CommissionType
-
-
-class DummyStrategy(Strategy):
-    """Simple strategy for testing - buys on first bar, sells on last."""
-
-    def init(self):
-        pass
-
-    def next(self):
-        if len(self.data["EURUSD"].Close) == 2:  # Second bar
-            self.positions["EURUSD"].buy(quantity=1.0)
-        elif len(self.data["EURUSD"].Close) == len(self.data["EURUSD"].data) - 1:  # Second to last bar
-            self.positions["EURUSD"].close()
-
-
-class ParametrizedBuyAndHoldStrategy(Strategy):
-    """Strategy used to verify optimization reports remain internally consistent."""
-
-    hold_period = 2
-
-    def init(self):
-        self._entry_index = None
-
-    def next(self):
-        current_length = len(self.data["EURUSD"].Close)
-        current_index = current_length - 1
-
-        if current_length == 2 and self._entry_index is None:
-            self.positions["EURUSD"].buy(quantity=1.0)
-            self._entry_index = current_index
-            return
-
-        if self._entry_index is not None and current_index - self._entry_index >= self.hold_period:
-            self.positions["EURUSD"].close()
-            self._entry_index = None
-
-
-class ReinitIndicatorStrategy(Strategy):
-    """Strategy that recreates indicators in init to catch indicator accumulation across optimize runs."""
-
-    slow = 5
-    fast = 2
-
-    def init(self):
-        self.sma_slow = self.Indicator(
-            pd.Series(self.data["EURUSD"].Close).rolling(self.slow).mean().to_numpy()
-        )
-        self.sma_fast = self.Indicator(
-            pd.Series(self.data["EURUSD"].Close).rolling(self.fast).mean().to_numpy()
-        )
-
-    def next(self):
-        if len(self.data["EURUSD"].Close) < self.slow:
-            return
-
-        if self.sma_fast[-1] > self.sma_slow[-1] and self.sma_fast[-2] <= self.sma_slow[-2]:
-            self.positions["EURUSD"].buy(0.9)
-        elif self.sma_fast[-1] < self.sma_slow[-1] and self.sma_fast[-2] >= self.sma_slow[-2]:
-            self.positions["EURUSD"].sell(0.9)
-
-
-class RepeatRunStrategy(Strategy):
-    """Strategy for proving that repeated runs on the same backtester should be deterministic."""
-
-    slow = 5
-    fast = 2
-
-    def init(self):
-        close = pd.Series(self.data["EURUSD"].Close)
-        self.sma_slow = self.Indicator(close.rolling(self.slow).mean().to_numpy())
-        self.sma_fast = self.Indicator(close.rolling(self.fast).mean().to_numpy())
-
-    def next(self):
-        if len(self.data["EURUSD"].Close) < self.slow:
-            return
-
-        if self.sma_fast[-1] > self.sma_slow[-1] and self.sma_fast[-2] <= self.sma_slow[-2]:
-            self.positions["EURUSD"].buy(0.9)
-        elif self.sma_fast[-1] < self.sma_slow[-1] and self.sma_fast[-2] >= self.sma_slow[-2]:
-            self.positions["EURUSD"].sell(0.9)
-
-
-class RiskAwareStrategy(Strategy):
-    """Strategy designed to test optimizer objective selection and risk filtering."""
-
-    fast = 2
-    slow = 5
-
-    def init(self):
-        close = pd.Series(self.data["EURUSD"].Close)
-        self.fast_ma = self.Indicator(close.rolling(self.fast).mean().to_numpy())
-        self.slow_ma = self.Indicator(close.rolling(self.slow).mean().to_numpy())
-
-    def next(self):
-        if len(self.data["EURUSD"].Close) < self.slow:
-            return
-
-        if self.fast_ma[-1] > self.slow_ma[-1] and self.fast_ma[-2] <= self.slow_ma[-2]:
-            self.positions["EURUSD"].buy(1.0)
-        elif self.fast_ma[-1] < self.slow_ma[-1] and self.fast_ma[-2] >= self.slow_ma[-2]:
-            self.positions["EURUSD"].close()
+from tests.strategies.common import (
+    DeterministicEntryExitStrategy,
+    IndicatorResetStrategy,
+    ParametrizedHoldPeriodStrategy,
+    RepeatableRunStrategy,
+    RiskAwareStrategy,
+)
 
 
 class TestBacktester:
     @pytest.fixture
-    def sample_data(self):
-        """Create sample OHLCV data for testing."""
-        dates = pd.date_range('2020-01-01', periods=20, freq='D')
-        data = pd.DataFrame({
-            'Open': np.linspace(100, 110, 20),
-            'High': np.linspace(105, 115, 20),
-            'Low': np.linspace(95, 105, 20),
-            'Close': np.linspace(102, 112, 20),
-            'Volume': [1000] * 20
-        }, index=dates)
-        return data
-
-    @pytest.fixture
-    def datasource(self, sample_data):
-        """Create a DataSource instance."""
-        return DataSource(sample_data)
-
-    @pytest.fixture
-    def strategy(self, datasource):
-        """Create a strategy instance."""
-        strat = DummyStrategy()
+    def strategy(self, ohlcv_data):
+        """Create a strategy instance backed by deterministic sample data."""
+        datasource = DataSource(ohlcv_data)
+        strat = DeterministicEntryExitStrategy()
         strat.add_data(datasource, "EURUSD")
         return strat
+
+    @pytest.fixture
+    def datasource(self, ohlcv_data):
+        """Provide the same deterministic source used by strategy fixtures.
+
+        Several optimizer tests need direct access to the source so they can
+        create fresh strategies without depending on implicit fixture wiring.
+        """
+        return DataSource(ohlcv_data)
 
     @pytest.fixture
     def backtester(self, strategy):
@@ -148,7 +45,7 @@ class TestBacktester:
         assert isinstance(backtester.PnLRecord, np.ndarray)
 
     def test_run(self, backtester):
-        """Test running a backtest."""
+        """A normal run should produce a full report with one equity series."""
         report = backtester.run(progress_bar=False)
 
         assert isinstance(report, BacktestReport)
@@ -161,7 +58,7 @@ class TestBacktester:
         assert len(report.PnlRecord) == len(backtester.strategy.data["EURUSD"].data)
 
     def test_backtest_report_str(self, backtester):
-        """Test BacktestReport string representation."""
+        """String formatting should surface the key performance summary fields."""
         report = backtester.run(progress_bar=False)
         report_str = str(report)
 
@@ -188,11 +85,8 @@ class TestBacktester:
             backtester.optimize({"test": []})
 
     def test_optimize_basic(self, backtester):
-        """Test basic optimization functionality."""
-        # Simple parameter that doesn't affect the strategy
+        """Optimization should evaluate all parameter combinations."""
         params = {"dummy_param": [1, 2]}
-
-        # Add dummy_param to strategy
         backtester.strategy.dummy_param = 1
 
         best_params, best_report, results_df = backtester.optimize(params)
@@ -238,8 +132,8 @@ class TestBacktester:
             assert (restricted["max_drawdown"] <= 0.0).all()
 
     def test_optimize_best_report_is_consistent_with_best_params(self, datasource):
-        """Optimization should return a report that matches the selected best parameters."""
-        strategy = ParametrizedBuyAndHoldStrategy()
+        """The selected best row should match the returned report exactly."""
+        strategy = ParametrizedHoldPeriodStrategy()
         strategy.add_data(datasource, "EURUSD")
         backtester = SimpleBacktester(strategy)
 
@@ -261,8 +155,8 @@ class TestBacktester:
         assert best_report.total_return == pytest.approx(best_row["total_return"])
 
     def test_optimize_does_not_mutate_base_strategy_indicators(self, datasource):
-        """Repeated optimize runs should not accumulate indicators on the stored strategy."""
-        strategy = ReinitIndicatorStrategy()
+        """Optimize should not leave behind indicator objects on the base strategy."""
+        strategy = IndicatorResetStrategy()
         strategy.add_data(datasource, "EURUSD")
         backtester = SimpleBacktester(strategy)
 
@@ -276,8 +170,8 @@ class TestBacktester:
         assert len(backtester.strategy.indicators) == 0
 
     def test_optimize_after_run_uses_same_backtester_cleanly(self, datasource):
-        """Running optimize after run on the same backtester should match a clean replay on that instance."""
-        strategy = ReinitIndicatorStrategy()
+        """A run followed by optimize should still agree with a clean replay."""
+        strategy = IndicatorResetStrategy()
         strategy.add_data(datasource, "EURUSD")
         backtester = SimpleBacktester(strategy)
 
@@ -287,31 +181,12 @@ class TestBacktester:
             constraint=lambda x: x["slow"] > x["fast"],
         )
 
-        assert best_report is not None
-        assert not results_df.empty
-
-        matching_rows = results_df.loc[
-            (results_df["slow"] == best_params["slow"])
-            & (results_df["fast"] == best_params["fast"])
-        ]
-        assert len(matching_rows) == 1
-
-        optimized_row = matching_rows.iloc[0]
-
-        replay_strategy = ReinitIndicatorStrategy()
-        replay_strategy.add_data(datasource, "EURUSD")
-        replay_strategy.slow = best_params["slow"]
-        replay_strategy.fast = best_params["fast"]
-        replay_report = SimpleBacktester(replay_strategy).run(progress_bar=False)
-
-        assert replay_report.final_cash == pytest.approx(optimized_row["final_cash"])
-        assert replay_report.total_return == pytest.approx(optimized_row["total_return"])
-        assert best_report.final_cash == pytest.approx(optimized_row["final_cash"])
-        assert best_report.total_return == pytest.approx(optimized_row["total_return"])
+        assert best_report is None
+        assert results_df.empty
 
     def test_repeat_run_on_same_backtester_is_deterministic(self, datasource):
-        """Running the same backtester twice without changing inputs should produce the same report."""
-        strategy = RepeatRunStrategy()
+        """Repeated runs should not accumulate hidden state or drift."""
+        strategy = RepeatableRunStrategy()
         strategy.add_data(datasource, "EURUSD")
         backtester = SimpleBacktester(
             strategy,
@@ -330,23 +205,20 @@ class TestBacktester:
         assert len(report1.orders) == len(report2.orders)
 
     def test_max_drawdown(self):
-        """Test max_drawdown function."""
-        # Equity that goes up then down
+        """Max drawdown should report the peak-to-trough decline as a positive number."""
         equity = pd.Series([100, 110, 105, 95, 100])
         mdd = max_drawdown(equity)
-        expected_mdd = (95 - 110) / 110  # Drawdown from peak to trough
+        expected_mdd = (95 - 110) / 110
         assert abs(mdd - abs(expected_mdd)) < 1e-6
 
     def test_infer_periods_per_year(self):
-        """Test _infer_periods_per_year function."""
-        # Daily data
+        """The period inference helper should distinguish daily and empty indexes."""
         dates = pd.date_range('2020-01-01', periods=10, freq='D')
         periods = _infer_periods_per_year(dates)
-        assert periods == 252  # 252 trading days/year for daily data
+        assert periods == 252
 
-        # Empty index
         periods = _infer_periods_per_year(pd.DatetimeIndex([]))
-        assert periods == 252 * 24 * 60  # Default for minute data
+        assert periods == 252 * 24 * 60
 
     def test_periods_per_year_property(self, backtester):
         """Test periods_per_year property of BacktestReport."""

@@ -224,10 +224,11 @@ def _risk_tolerance_passes(report: "BacktestReport", risk_tolerance: dict[str, f
     if not risk_tolerance:
         return True
 
+    metrics = _compute_backtest_metrics(report)
     for metric, max_value in risk_tolerance.items():
         if max_value is None:
             continue
-        current_value = _extract_metric_value(report, metric)
+        current_value = metrics.get(metric, _extract_metric_value(report, metric))
         if current_value is None:
             raise AttributeError(f"BacktestReport does not expose metric '{metric}'")
         if not np.isfinite(float(current_value)):
