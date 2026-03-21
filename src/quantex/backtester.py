@@ -346,12 +346,14 @@ class BacktestReport:
         mdd = float(abs(drawdown))
 
         tot_return = float(equity.iloc[-1] / equity.iloc[0] - 1.0)
+        annualized_return = float((1.0 + tot_return) ** (self.periods_per_year / max(len(returns), 1)) - 1.0)
         tot_orders = len(self.orders)
 
         return (
             f"Starting Cash: ${self.starting_cash:,.2f}\n"
             f"Final Cash: ${self.final_cash:,.2f}\n"
             f"Total Return: {tot_return:,.2%}\n"
+            f"Annualized Return: {annualized_return:,.2%}\n"
             f"Sharpe Ratio: {sharpe:.2f}" if np.isfinite(sharpe) else
             f"Sharpe Ratio: nan"
         ) + (
