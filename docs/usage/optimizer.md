@@ -177,6 +177,47 @@ The sequential optimizer computes these inside [`SimpleBacktester.optimize()`](.
 
 The parallel optimizer computes them in [`_worker_eval()`](../../src/quantex/backtester.py:151).
 
+## Custom optimization objectives
+
+Both optimizers accept an `objective` argument. By default it is `"sharpe"`, but you can target any metric exposed by [`BacktestReport`](../../src/quantex/backtester.py:188) or any computed optimizer metric.
+
+Supported built-in optimization metrics are:
+
+- `final_cash`
+- `total_return`
+- `sharpe`
+- `max_drawdown`
+- `trades`
+
+Example:
+
+```python
+best_params, best_report, results_df = backtester.optimize(
+    params,
+    objective="total_return",
+)
+```
+
+If you choose a `BacktestReport` property directly, the optimizer will call it or read it just like the report does.
+
+## Risk tolerance filtering
+
+Both optimizers also accept an optional `risk_tolerance` dictionary. It is off by default.
+
+Each entry is treated as a maximum allowed value. Any candidate exceeding one of the thresholds is discarded before it can be selected.
+
+Example:
+
+```python
+best_params, best_report, results_df = backtester.optimize(
+    params,
+    objective="total_return",
+    risk_tolerance={"max_drawdown": 0.05},
+)
+```
+
+This example rejects any strategy whose maximum drawdown exceeds 5%.
+
 ## How the best result is chosen
 
 ### Sequential optimizer

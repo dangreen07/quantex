@@ -185,6 +185,58 @@ def _worker_eval(param_items):
 
     return result
 
+def _compute_backtest_metrics(report: "BacktestReport") -> dict[str, Any]:
+    equity = report.PnlRecord.astype(float)
+    returns = equity.pct_change().dropna()
+
+    annual_rf = report.annual_rf
+    rf_per_period = annual_rf / report.periods_per_year
+
+    if len(returns) < 2 or returns.std(ddof=1) == 0:
+        sharpe = float("nan")
+    else:
+        excess = returns - rf_per_period
+        mean = excess.mean()
+        vol = excess.std(ddof=1)
+        sharpe = float((mean / vol) * (report.periods_per_year ** 0.5))
+
+    running_max = equity.cummax()
+    drawdown = ((equity - running_max) / running_max).min()
+    mdd = float(abs(drawdown))
+
+    tot_return = float(equity.iloc[-1] / equity.iloc[0] - 1.0)
+
+    return {
+        "final_cash": report.final_cash,
+        "total_return": tot_return,
+        "sharpe": sharpe,
+        "max_drawdown": mdd,
+        "trades": len(report.orders),
+    }
+
+def _extract_metric_value(report: "BacktestReport", metric: str) -> Any:
+    value = getattr(report, metric, None)
+    if callable(value):
+        value = value()
+    return value
+
+def _risk_tolerance_passes(report: "BacktestReport", risk_tolerance: dict[str, float] | None) -> bool:
+    if not risk_tolerance:
+        return True
+
+    for metric, max_value in risk_tolerance.items():
+        if max_value is None:
+            continue
+        current_value = _extract_metric_value(report, metric)
+        if current_value is None:
+            raise AttributeError(f"BacktestReport does not expose metric '{metric}'")
+        if not np.isfinite(float(current_value)):
+            return False
+        if float(current_value) > float(max_value):
+            return False
+
+    return True
+
 @dataclass
 class BacktestReport:
     """
@@ -519,7 +571,13 @@ class SimpleBacktester():
             orders=orders,
             tradeRecord=tradeRecord)
     
-    def optimize(self, params: dict[str, range], constraint: Callable[[dict[str, Any]], bool] | None = None):
+    def optimize(
+        self,
+        params: dict[str, range],
+        constraint: Callable[[dict[str, Any]], bool] | None = None,
+        objective: str = "sharpe",
+        risk_tolerance: dict[str, float] | None = None,
+    ):
         """
         Perform a grid search over the provided parameter ranges.
         
@@ -542,6 +600,15 @@ class SimpleBacktester():
                 True to evaluate the combo or False to skip it. Useful for enforcing
                 logical constraints like ensuring fast_period < slow_period.
                 Defaults to None (no constraints).
+            objective (str, optional): BacktestReport attribute or computed metric to
+                optimize. Defaults to "sharpe". Supports any attribute exposed by
+                BacktestReport and the computed metrics "final_cash", "total_return",
+                "sharpe", "max_drawdown", and "trades".
+            risk_tolerance (dict[str, float] | None, optional): Optional maximum
+                allowed values for candidate metrics. Any candidate that exceeds a
+                threshold is discarded before scoring. For example,
+                {"max_drawdown": 0.05} rejects strategies with drawdown above 5%.
+                Defaults to None.
                 
         Returns:
             tuple: A tuple containing (best_params, best_report, results):
@@ -557,9 +624,8 @@ class SimpleBacktester():
             TypeError: If any parameter values are not iterable.
             
         Note:
-            The optimization uses Sharpe ratio as the primary selection criterion.
-            If Sharpe ratio is invalid (NaN), it falls back to total return,
-            then to final cash amount.
+            The optimization uses the selected objective as the primary selection
+            criterion. If the objective is invalid (NaN), the candidate is skipped.
             
         Example:
             >>> bt = SimpleBacktester(strategy)  
@@ -591,6 +657,8 @@ class SimpleBacktester():
         best_params = None
         best_score = -np.inf
 
+        valid_metrics = {"final_cash", "total_return", "sharpe", "max_drawdown", "trades"}
+
         total_combos = len(list(itertools.product(*value_lists)))
 
         for combo in tqdm(itertools.product(*value_lists), total=(total_combos)):
@@ -621,47 +689,33 @@ class SimpleBacktester():
             )
             report = bt.run(progress_bar=False)
 
-            # Compute metrics
-            equity = report.PnlRecord.astype(float)
-            returns = equity.pct_change().dropna()
+            metrics = _compute_backtest_metrics(report)
 
-            # Risk-free per period from an annual rate
-            annual_rf = 0.04
-            rf_per_period = annual_rf / report.periods_per_year
+            if not _risk_tolerance_passes(report, risk_tolerance):
+                continue
 
-            if len(returns) < 2 or returns.std(ddof=1) == 0:
-                sharpe = np.nan
-                lo = np.nan
-                hi = np.nan
+            if objective in valid_metrics:
+                score = metrics.get(objective)
             else:
-                excess = returns - rf_per_period
-                mean = excess.mean()
-                vol = excess.std(ddof=1)
-                sharpe = (mean / vol) * np.sqrt(report.periods_per_year)
+                score = getattr(report, objective, None)
+                if callable(score):
+                    score = score()
 
-            # Max drawdown on equity curve
-            running_max = equity.cummax()
-            drawdown = ((equity - running_max) / running_max).min()
-            mdd = float(abs(drawdown))
+            if score is None:
+                raise AttributeError(f"BacktestReport does not expose objective '{objective}'")
 
-            tot_return = float(equity.iloc[-1] / equity.iloc[0] - 1.0)
+            try:
+                score = float(score)  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                raise TypeError(f"Objective '{objective}' must be numeric")
+
+            if not np.isfinite(score):
+                continue
 
             row = dict(row_params)
-            row.update(
-                {
-                    "final_cash": report.final_cash,
-                    "total_return": tot_return,
-                    "sharpe": sharpe,
-                    "max_drawdown": mdd,
-                    "trades": report.orders,
-                }
-            )
+            row.update(metrics)
+            row["objective_score"] = score
             results_rows.append(row)
-
-            # Selection score: prefer Sharpe, then total return, then final cash
-            score = sharpe
-            if not np.isfinite(score):
-                score = -1000 ## Really bad
 
             if score > best_score:
                 best_score = score
@@ -672,30 +726,16 @@ class SimpleBacktester():
 
         # Sort results by composite score (Sharpe desc, then return, then cash)
         if not results_df.empty:
-            def _to_score(val):
-                try:
-                    v = float(val)
-                except (TypeError, ValueError):
-                    return None
-                return v if np.isfinite(v) else None
-
-            scores = []
-            for _, r in results_df.iterrows():
-                s = _to_score(r.get("sharpe"))
-                if s is None:
-                    s = _to_score(r.get("total_return"))
-                if s is None:
-                    s = _to_score(r.get("final_cash"))
-                scores.append(s if s is not None else float("-inf"))
-            results_df["_score"] = scores
-            results_df.sort_values(by=["_score"], ascending=False, inplace=True, kind="mergesort")
-            results_df.drop(columns=["_score"], inplace=True)
+            results_df.sort_values(by=["objective_score"], ascending=False, inplace=True, kind="mergesort")
 
         return best_params or {}, best_report, results_df
     
-    def optimize_parallel(self,
+    def optimize_parallel(
+             self,
              params: dict[str, range],
              constraint: Callable[[dict[str, Any]], bool] | None = None,
+             objective: str = "sharpe",
+             risk_tolerance: dict[str, float] | None = None,
              workers: int | None = None,
              chunksize: int = 1):
         """
@@ -708,8 +748,13 @@ class SimpleBacktester():
         Args:
             params (dict[str, range]): Dictionary mapping strategy attribute names
                 to iterables of candidate values (same format as optimize()).
-            constraint (Callable[[dict[str, Any]], bool] | None, optional):
+             constraint (Callable[[dict[str, Any]], bool] | None, optional):
                 Optional callable for parameter constraints (same as optimize()).
+                Defaults to None.
+             objective (str, optional): BacktestReport attribute or computed metric to
+                optimize. Defaults to "sharpe".
+             risk_tolerance (dict[str, float] | None, optional): Optional maximum
+                allowed metric values for candidate rejection before scoring.
                 Defaults to None.
             workers (int | None, optional): Maximum number of worker processes to use.
                 If None, defaults to min(os.cpu_count()-1, 4) to avoid overwhelming
@@ -818,27 +863,26 @@ class SimpleBacktester():
             for res in tqdm(it, total=total_combos, disable=(total_combos <= 1)):
                 results_rows.append(res)
 
-        # Build DataFrame of small metrics returned from workers
-        results_df = pd.DataFrame(results_rows)
-        # Compute a composite score like before: prefer sharpe, then return, then final_cash
-        if not results_df.empty:
-            def _to_score(val):
-                try:
-                    v = float(val)
-                except (TypeError, ValueError):
-                    return None
-                return v if np.isfinite(v) else None
+        valid_metrics = {"final_cash", "total_return", "sharpe", "max_drawdown", "trades"}
+        filtered_rows = []
+        for row in results_rows:
+            row_params = row["params"]
+            if risk_tolerance is not None:
+                if any(float(row.get(metric, np.inf)) > float(limit) for metric, limit in risk_tolerance.items() if limit is not None):
+                    continue
+            if objective in valid_metrics:
+                score = row.get(objective)
+            else:
+                score = row.get(objective)
+            if score is None or not np.isfinite(float(score)):
+                continue
+            row["objective_score"] = float(score)
+            filtered_rows.append(row)
 
-            scores = []
-            for _, r in results_df.iterrows():
-                ret = r.get("total_return")
-                s = None
-                if (not ret == None and ret > 0):
-                    s = _to_score(r.get("sharpe"))
-                scores.append(s if s is not None else float("-inf"))
-            results_df["_score"] = scores
-            results_df.sort_values(by=["_score"], ascending=False, inplace=True, kind="mergesort")
-            results_df.drop(columns=["_score"], inplace=True)
+        # Build DataFrame of small metrics returned from workers
+        results_df = pd.DataFrame(filtered_rows)
+        if not results_df.empty:
+            results_df.sort_values(by=["objective_score"], ascending=False, inplace=True, kind="mergesort")
 
         # Determine best params from results_df if any
         if results_df.empty:

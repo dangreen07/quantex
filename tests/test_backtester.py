@@ -87,6 +87,27 @@ class RepeatRunStrategy(Strategy):
             self.positions["EURUSD"].sell(0.9)
 
 
+class RiskAwareStrategy(Strategy):
+    """Strategy designed to test optimizer objective selection and risk filtering."""
+
+    fast = 2
+    slow = 5
+
+    def init(self):
+        close = pd.Series(self.data["EURUSD"].Close)
+        self.fast_ma = self.Indicator(close.rolling(self.fast).mean().to_numpy())
+        self.slow_ma = self.Indicator(close.rolling(self.slow).mean().to_numpy())
+
+    def next(self):
+        if len(self.data["EURUSD"].Close) < self.slow:
+            return
+
+        if self.fast_ma[-1] > self.slow_ma[-1] and self.fast_ma[-2] <= self.slow_ma[-2]:
+            self.positions["EURUSD"].buy(1.0)
+        elif self.fast_ma[-1] < self.slow_ma[-1] and self.fast_ma[-2] >= self.slow_ma[-2]:
+            self.positions["EURUSD"].close()
+
+
 class TestBacktester:
     @pytest.fixture
     def sample_data(self):
@@ -180,6 +201,41 @@ class TestBacktester:
         assert isinstance(best_report, BacktestReport)
         assert isinstance(results_df, pd.DataFrame)
         assert len(results_df) == 2  # Two parameter combinations
+
+    def test_optimize_supports_custom_objective(self, datasource):
+        strategy = RiskAwareStrategy()
+        strategy.add_data(datasource, "EURUSD")
+        backtester = SimpleBacktester(strategy)
+
+        best_params, best_report, results_df = backtester.optimize(
+            {"fast": range(2, 4), "slow": range(5, 7)},
+            constraint=lambda p: p["fast"] < p["slow"],
+            objective="total_return",
+        )
+
+        assert isinstance(best_report, BacktestReport)
+        assert not results_df.empty
+        assert "objective_score" in results_df.columns
+        assert best_report.total_return == pytest.approx(results_df.iloc[0]["objective_score"])
+
+    def test_optimize_filters_by_risk_tolerance(self, datasource):
+        strategy = RiskAwareStrategy()
+        strategy.add_data(datasource, "EURUSD")
+        backtester = SimpleBacktester(strategy)
+
+        _, _, unrestricted = backtester.optimize(
+            {"fast": range(2, 4), "slow": range(5, 7)},
+            constraint=lambda p: p["fast"] < p["slow"],
+        )
+        _, _, restricted = backtester.optimize(
+            {"fast": range(2, 4), "slow": range(5, 7)},
+            constraint=lambda p: p["fast"] < p["slow"],
+            risk_tolerance={"max_drawdown": 0.0},
+        )
+
+        assert len(restricted) <= len(unrestricted)
+        if not restricted.empty:
+            assert (restricted["max_drawdown"] <= 0.0).all()
 
     def test_optimize_best_report_is_consistent_with_best_params(self, datasource):
         """Optimization should return a report that matches the selected best parameters."""
