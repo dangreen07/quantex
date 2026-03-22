@@ -106,6 +106,7 @@ def test_builtin_indicator_catalog_matches_known_values():
     macd_line, macd_signal, macd_hist = indicators.macd(close, 3, 5, 2)
     atr_3 = indicators.atr(high, low, close, 3)
     obv_values = indicators.obv(close, volume)
+    vwap_values = indicators.vwap(high, low, close, volume)
     adx_values, plus_di, minus_di = indicators.adx(high, low, close, 3)
 
     np.testing.assert_allclose(sma_3, np.array([np.nan, np.nan, 11.0, 12.0, 13.0, 14.0]), equal_nan=True)
@@ -116,6 +117,11 @@ def test_builtin_indicator_catalog_matches_known_values():
     np.testing.assert_allclose(upper[2:], np.array([12.63299316, 13.63299316, 14.63299316, 15.63299316]), atol=1e-8)
     np.testing.assert_allclose(atr_3[2:], np.array([2.0, 2.0, 2.0, 2.0]), atol=1e-8)
     np.testing.assert_allclose(obv_values, np.array([0.0, 110.0, 230.0, 360.0, 500.0, 650.0]))
+    np.testing.assert_allclose(
+        vwap_values,
+        np.array([10.0, 10.52381, 11.060606, 11.608696, 12.166667, 12.733333]),
+        atol=1e-6,
+    )
     assert np.isfinite(macd_line[-1])
     assert np.isfinite(macd_signal[-1])
     assert np.isfinite(macd_hist[-1])

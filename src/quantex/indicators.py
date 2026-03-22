@@ -319,6 +319,22 @@ def mfi(high: ArrayLike, low: ArrayLike, close: ArrayLike, volume: ArrayLike, pe
     return result
 
 
+def vwap(high: ArrayLike, low: ArrayLike, close: ArrayLike, volume: ArrayLike) -> np.ndarray:
+    high_array = _as_float_array(high)
+    low_array = _as_float_array(low)
+    close_array = _as_float_array(close)
+    volume_array = _as_float_array(volume)
+    _validate_same_length(high_array, low_array, close_array, volume_array)
+    typical_price = (high_array + low_array + close_array) / 3.0
+    price_volume = typical_price * volume_array
+    cumulative_price_volume = np.cumsum(price_volume)
+    cumulative_volume = np.cumsum(volume_array)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        result = cumulative_price_volume / cumulative_volume
+    result = np.where(cumulative_volume == 0.0, np.nan, result)
+    return result
+
+
 def adx(high: ArrayLike, low: ArrayLike, close: ArrayLike, period: int = 14) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     high_array = _as_float_array(high)
     low_array = _as_float_array(low)
@@ -589,6 +605,7 @@ class IndicatorCatalog:
         self.williams_r = williams_r
         self.obv = obv
         self.mfi = mfi
+        self.vwap = vwap
         self.adx = adx
         self.ichimoku_cloud = ichimoku_cloud
         self.keltner_channels = keltner_channels
