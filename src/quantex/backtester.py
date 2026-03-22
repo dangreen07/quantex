@@ -15,6 +15,140 @@ import concurrent.futures
 import pickle
 import os
 import gc
+from enum import Enum
+
+
+class DataSplitMode(Enum):
+    """Enumeration for data split modes in optimization."""
+    TRAIN = "train"
+    VALIDATE = "validate"
+    TEST = "test"
+
+
+@dataclass
+class TrainValidateTestSplit:
+    """
+    Container for train/validate/test data splits.
+    
+    This class holds the split configuration and indices for dividing
+    historical data into training, validation, and test sets for
+    machine learning-style optimization workflows.
+    
+    Attributes:
+        train_start (int): Starting index for training data.
+        train_end (int): Ending index for training data.
+        validate_start (int): Starting index for validation data.
+        validate_end (int): Ending index for validation data.
+        test_start (int): Starting index for test data.
+        test_end (int): Ending index for test data.
+        train_ratio (float): Ratio of data used for training.
+        validate_ratio (float): Ratio of data used for validation.
+        test_ratio (float): Ratio of data used for testing.
+    """
+    train_start: int
+    train_end: int
+    validate_start: int
+    validate_end: int
+    test_start: int
+    test_end: int
+    train_ratio: float = 0.6
+    validate_ratio: float = 0.2
+    test_ratio: float = 0.2
+    
+    def __post_init__(self):
+        """Validate split ratios sum to 1.0."""
+        total = self.train_ratio + self.validate_ratio + self.test_ratio
+        if not np.isclose(total, 1.0):
+            raise ValueError(
+                f"Split ratios must sum to 1.0, got {total:.3f}"
+            )
+
+
+def create_train_validate_test_split(
+    data_length: int,
+    train_ratio: float = 0.6,
+    validate_ratio: float = 0.2,
+    test_ratio: float = 0.2
+) -> TrainValidateTestSplit:
+    """
+    Create indices for train/validate/test split.
+    
+    This function divides the data indices into three sets for ML-style
+    optimization: training (parameter fitting), validation (hyperparameter
+    selection), and testing (final evaluation).
+    
+    Args:
+        data_length (int): Total number of data points.
+        train_ratio (float, optional): Fraction of data for training.
+            Defaults to 0.6 (60%).
+        validate_ratio (float, optional): Fraction of data for validation.
+            Defaults to 0.2 (20%).
+        test_ratio (float, optional): Fraction of data for testing.
+            Defaults to 0.2 (20%).
+            
+    Returns:
+        TrainValidateTestSplit: Object containing start/end indices for
+            each split.
+            
+    Raises:
+        ValueError: If ratios don't sum to 1.0 or are invalid.
+        
+    Example:
+        >>> split = create_train_validate_test_split(1000, 0.6, 0.2, 0.2)
+        >>> print(f"Train: {split.train_start}-{split.train_end}")
+        >>> print(f"Validate: {split.validate_start}-{split.validate_end}")
+        >>> print(f"Test: {split.test_start}-{split.test_end}")
+    """
+    if not np.isclose(train_ratio + validate_ratio + test_ratio, 1.0):
+        raise ValueError("Split ratios must sum to 1.0")
+    
+    if train_ratio <= 0 or validate_ratio <= 0 or test_ratio <= 0:
+        raise ValueError("All split ratios must be positive")
+    
+    train_end = int(data_length * train_ratio)
+    validate_end = int(data_length * (train_ratio + validate_ratio))
+    
+    return TrainValidateTestSplit(
+        train_start=0,
+        train_end=train_end,
+        validate_start=train_end,
+        validate_end=validate_end,
+        test_start=validate_end,
+        test_end=data_length,
+        train_ratio=train_ratio,
+        validate_ratio=validate_ratio,
+        test_ratio=test_ratio
+    )
+
+
+@dataclass
+class OptimizationResult:
+    """
+    Container for optimization results with train/validate/test splits.
+    
+    This class holds the complete results of an optimization run that
+    includes evaluation on all three data splits, enabling proper
+    model selection and generalization assessment.
+    
+    Attributes:
+        best_params (dict): Best parameter values found.
+        train_report: Backtest report for training data.
+        validate_report: Backtest report for validation data.
+        test_report: Backtest report for test data.
+        train_metrics (dict): Computed metrics for training performance.
+        validate_metrics (dict): Computed metrics for validation performance.
+        test_metrics (dict): Computed metrics for test performance.
+        all_results (pd.DataFrame): DataFrame with all parameter combinations
+            and their metrics for each split.
+    """
+    best_params: dict
+    train_report: Any
+    validate_report: Any
+    test_report: Any
+    train_metrics: dict
+    validate_metrics: dict
+    test_metrics: dict
+    all_results: pd.DataFrame
 
 def max_drawdown(equity: pd.Series) -> float:
     """
@@ -907,3 +1041,580 @@ class SimpleBacktester():
         best_report = bt.run(progress_bar=False)
 
         return best_params, best_report, results_df
+
+    def optimize_with_split(
+        self,
+        params: dict[str, Any],
+        constraint: Callable[[dict[str, Any]], bool] | None = None,
+        objective: str = "sharpe",
+        risk_tolerance: dict[str, float] | None = None,
+        train_ratio: float = 0.6,
+        validate_ratio: float = 0.2,
+        test_ratio: float = 0.2,
+        selection_criterion: str = "validate",
+    ) -> OptimizationResult:
+        """
+        Optimize strategy parameters using train/validate/test splits.
+        
+        This method implements ML-style optimization with three data splits:
+        - Training set: Used to fit strategy parameters
+        - Validation set: Used to select the best parameters
+        - Test set: Used for final out-of-sample evaluation
+        
+        This approach helps prevent overfitting by evaluating generalization
+        performance on held-out data before final selection.
+        
+        Args:
+            params (dict[str, range]): Dictionary mapping strategy attribute names
+                to iterables of candidate values (same format as optimize()).
+            constraint (Callable[[dict[str, Any]], bool] | None, optional):
+                Optional callable for parameter constraints. Defaults to None.
+            objective (str, optional): Metric to optimize. Defaults to "sharpe".
+                Supports same metrics as optimize().
+            risk_tolerance (dict[str, float] | None, optional): Optional maximum
+                allowed metric values. Defaults to None.
+            train_ratio (float, optional): Fraction of data for training.
+                Defaults to 0.6 (60%).
+            validate_ratio (float, optional): Fraction of data for validation.
+                Defaults to 0.2 (20%).
+            test_ratio (float, optional): Fraction of data for testing.
+                Defaults to 0.2 (20%).
+            selection_criterion (str, optional): Which split to use for final
+                parameter selection. Options: "train", "validate", "test".
+                Defaults to "validate".
+                
+        Returns:
+            OptimizationResult: Object containing:
+                - best_params: Best parameters found
+                - train_report: BacktestReport for training data
+                - validate_report: BacktestReport for validation data
+                - test_report: BacktestReport for test data
+                - train_metrics: Metrics computed on training data
+                - validate_metrics: Metrics computed on validation data
+                - test_metrics: Metrics computed on test data
+                - all_results: DataFrame with all results
+                
+        Raises:
+            ValueError: If split ratios don't sum to 1.0 or selection_criterion
+                is invalid.
+                
+        Example:
+            >>> bt = SimpleBacktester(strategy)
+            >>> result = bt.optimize_with_split(
+            ...     {'fast_period': [5, 10, 15], 'slow_period': [20, 30, 50]},
+            ...     selection_criterion='validate'
+            ... )
+            >>> print(f"Best params: {result.best_params}")
+            >>> print(f"Train Sharpe: {result.train_metrics['sharpe']}")
+            >>> print(f"Validate Sharpe: {result.validate_metrics['sharpe']}")
+            >>> print(f"Test Sharpe: {result.test_metrics['sharpe']}")
+        """
+        # Validate selection criterion
+        valid_criteria = {"train", "validate", "test"}
+        if selection_criterion not in valid_criteria:
+            raise ValueError(
+                f"selection_criterion must be one of {valid_criteria}, "
+                f"got '{selection_criterion}'"
+            )
+        
+        # Get data length from the strategy's data source
+        source = self.strategy.positions[list(self.strategy.positions.keys())[0]].source
+        data_length = len(source.data)
+        
+        # Create the split
+        split = create_train_validate_test_split(
+            data_length,
+            train_ratio,
+            validate_ratio,
+            test_ratio
+        )
+        
+        # Prepare parameter combinations
+        if not params:
+            raise ValueError("params must not be empty")
+
+        keys = list(params.keys())
+        value_lists = []
+        for k in keys:
+            vals = params[k]
+            try:
+                candidates = list(vals)
+            except TypeError:
+                raise TypeError(f"Parameter '{k}' must be iterable")
+            if len(candidates) == 0:
+                raise ValueError(f"Parameter '{k}' has no candidate values")
+            value_lists.append(candidates)
+
+        # Store results for each split
+        train_results = []
+        validate_results = []
+        test_results = []
+        
+        valid_metrics = {"final_cash", "total_return", "sharpe", "max_drawdown", "trades"}
+        
+        total_combos = len(list(itertools.product(*value_lists)))
+        
+        # Create a modified strategy that uses data slices
+        def create_split_strategy(params_dict: dict, split_mode: DataSplitMode):
+            """Create a strategy copy with data sliced to the specified split."""
+            strat_copy = copy.deepcopy(self.strategy)
+            for k, v in params_dict.items():
+                # Convert float to int if the strategy expects integer parameters
+                if isinstance(v, float) and v == int(v):
+                    v = int(v)
+                setattr(strat_copy, k, v)
+            
+            # Slice each data source to the appropriate split
+            for key, broker in strat_copy.positions.items():
+                source = broker.source
+                if split_mode == DataSplitMode.TRAIN:
+                    start, end = split.train_start, split.train_end
+                elif split_mode == DataSplitMode.VALIDATE:
+                    start, end = split.validate_start, split.validate_end
+                else:  # TEST
+                    start, end = split.test_start, split.test_end
+                
+                # Create a new data source with sliced data
+                sliced_df = source.data.iloc[start:end].copy()
+                from .datasource import DataSource
+                new_source = DataSource(sliced_df)
+                broker.source = new_source
+                # Also update the strategy's data dictionary
+                strat_copy.data[key] = new_source
+                
+            return strat_copy, split_mode
+
+        # Run optimization for each split
+        for combo in tqdm(itertools.product(*value_lists), total=total_combos, desc="Optimizing"):
+            row_params = {k: v for k, v in zip(keys, combo)}
+            
+            # Apply constraint
+            if constraint is not None:
+                try:
+                    if not bool(constraint(row_params)):
+                        continue
+                except Exception:
+                    continue
+            
+            # Evaluate on all three splits
+            for mode in [DataSplitMode.TRAIN, DataSplitMode.VALIDATE, DataSplitMode.TEST]:
+                strat_copy, _ = create_split_strategy(row_params, mode)
+                
+                bt = SimpleBacktester(
+                    strat_copy,
+                    cash=self.cash,
+                    commission=self.commission,
+                    commission_type=self.commission_type,
+                    lot_size=self.lot_size,
+                )
+                report = bt.run(progress_bar=False)
+                metrics = _compute_backtest_metrics(report)
+                
+                # Apply risk tolerance filter
+                if risk_tolerance is not None:
+                    if not _risk_tolerance_passes(report, risk_tolerance):
+                        continue
+                
+                # Compute objective score
+                if objective in valid_metrics:
+                    score = metrics.get(objective)
+                else:
+                    score = getattr(report, objective, None)
+                    if callable(score):
+                        score = score()
+                
+                if score is None or not np.isfinite(float(score)):  # type: ignore[arg-type]
+                    continue
+                
+                row = dict(row_params)
+                row["objective_score"] = float(score)  # type: ignore[arg-type]
+                row.update(metrics)
+                
+                if mode == DataSplitMode.TRAIN:
+                    train_results.append(row)
+                elif mode == DataSplitMode.VALIDATE:
+                    validate_results.append(row)
+                else:
+                    test_results.append(row)
+        
+        # Create DataFrames
+        train_df = pd.DataFrame(train_results) if train_results else pd.DataFrame()
+        validate_df = pd.DataFrame(validate_results) if validate_results else pd.DataFrame()
+        test_df = pd.DataFrame(test_results) if test_results else pd.DataFrame()
+        
+        # Select best parameters based on selection criterion
+        if selection_criterion == "validate" and not validate_df.empty:
+            validate_df_sorted = validate_df.sort_values(
+                by=["objective_score"], ascending=False, kind="mergesort"
+            )
+            best_idx = validate_df_sorted.index[0]
+            best_params = {k: validate_df.loc[best_idx, k] for k in keys}
+            best_validate_score = validate_df.loc[best_idx, "objective_score"]
+        elif selection_criterion == "train" and not train_df.empty:
+            train_df_sorted = train_df.sort_values(
+                by=["objective_score"], ascending=False, kind="mergesort"
+            )
+            best_idx = train_df_sorted.index[0]
+            best_params = {k: train_df.loc[best_idx, k] for k in keys}
+            best_validate_score = train_df.loc[best_idx, "objective_score"]
+        elif selection_criterion == "test" and not test_df.empty:
+            test_df_sorted = test_df.sort_values(
+                by=["objective_score"], ascending=False, kind="mergesort"
+            )
+            best_idx = test_df_sorted.index[0]
+            best_params = {k: test_df.loc[best_idx, k] for k in keys}
+            best_validate_score = test_df.loc[best_idx, "objective_score"]
+        else:
+            best_params = {}
+            best_validate_score = -np.inf
+        
+        # Get full reports for best parameters
+        train_report = None
+        validate_report = None
+        test_report = None
+        train_metrics = {}
+        validate_metrics = {}
+        test_metrics = {}
+        
+        if best_params:
+            # Run full backtests for best parameters on each split
+            for mode, report_attr, metrics_attr in [
+                (DataSplitMode.TRAIN, 'train_report', 'train_metrics'),
+                (DataSplitMode.VALIDATE, 'validate_report', 'validate_metrics'),
+                (DataSplitMode.TEST, 'test_report', 'test_metrics'),
+            ]:
+                strat_copy, _ = create_split_strategy(best_params, mode)
+                bt = SimpleBacktester(
+                    strat_copy,
+                    cash=self.cash,
+                    commission=self.commission,
+                    commission_type=self.commission_type,
+                    lot_size=self.lot_size,
+                )
+                report = bt.run(progress_bar=False)
+                metrics = _compute_backtest_metrics(report)
+                
+                if mode == DataSplitMode.TRAIN:
+                    train_report = report
+                    train_metrics = metrics
+                elif mode == DataSplitMode.VALIDATE:
+                    validate_report = report
+                    validate_metrics = metrics
+                else:
+                    test_report = report
+                    test_metrics = metrics
+        
+        # Combine all results
+        all_results = pd.DataFrame()
+        if not train_df.empty:
+            train_df_copy = train_df.copy()
+            train_df_copy["split"] = "train"
+            all_results = pd.concat([all_results, train_df_copy], ignore_index=True)
+        if not validate_df.empty:
+            validate_df_copy = validate_df.copy()
+            validate_df_copy["split"] = "validate"
+            all_results = pd.concat([all_results, validate_df_copy], ignore_index=True)
+        if not test_df.empty:
+            test_df_copy = test_df.copy()
+            test_df_copy["split"] = "test"
+            all_results = pd.concat([all_results, test_df_copy], ignore_index=True)
+        
+        return OptimizationResult(
+            best_params=best_params,
+            train_report=train_report,
+            validate_report=validate_report,
+            test_report=test_report,
+            train_metrics=train_metrics,
+            validate_metrics=validate_metrics,
+            test_metrics=test_metrics,
+            all_results=all_results
+        )
+
+    def optimize_gradient_descent(
+        self,
+        param_init: dict[str, float],
+        param_bounds: dict[str, tuple[float, float]],
+        objective: str = "sharpe",
+        learning_rate: float = 0.01,
+        max_iterations: int = 100,
+        tolerance: float = 1e-6,
+        momentum: float = 0.9,
+        train_ratio: float = 0.7,
+        validate_ratio: float = 0.15,
+        test_ratio: float = 0.15,
+        selection_criterion: str = "validate",
+        progress_bar: bool = True,
+    ) -> OptimizationResult:
+        """
+        Optimize strategy parameters using gradient descent.
+        
+        This method performs gradient-based optimization on continuous
+        strategy parameters, similar to machine learning workflows. It uses
+        train/validate/test splits to prevent overfitting and select the best
+        model based on validation performance.
+        
+        The optimization computes numerical gradients by evaluating small
+        perturbations around the current parameter values.
+        
+        Args:
+            param_init (dict[str, float]): Initial parameter values.
+            param_bounds (dict[str, tuple[float, float]]): Bounds for each
+                parameter as (min, max) tuples.
+            objective (str, optional): Metric to optimize. Defaults to "sharpe".
+                Supports same metrics as optimize().
+            learning_rate (float, optional): Step size for gradient descent.
+                Defaults to 0.01.
+            max_iterations (int, optional): Maximum number of iterations.
+                Defaults to 100.
+            tolerance (float, optional): Convergence tolerance. Optimization
+                stops when gradient magnitude falls below this threshold.
+                Defaults to 1e-6.
+            momentum (float, optional): Momentum factor for accelerated
+                descent. Defaults to 0.9.
+            train_ratio (float, optional): Fraction of data for training.
+                Defaults to 0.7 (70%).
+            validate_ratio (float, optional): Fraction of data for validation.
+                Defaults to 0.15 (15%).
+            test_ratio (float, optional): Fraction of data for testing.
+                Defaults to 0.15 (15%).
+            selection_criterion (str, optional): Which split to use for final
+                parameter selection. Options: "train", "validate", "test".
+                Defaults to "validate".
+            progress_bar (bool, optional): Whether to show progress bar.
+                Defaults to True.
+                
+        Returns:
+            OptimizationResult: Object containing:
+                - best_params: Optimized parameter values
+                - train_report: BacktestReport for training data
+                - validate_report: BacktestReport for validation data
+                - test_report: BacktestReport for test data
+                - train_metrics: Metrics computed on training data
+                - validate_metrics: Metrics computed on validation data
+                - test_metrics: Metrics computed on test data
+                - all_results: DataFrame with iteration history
+                
+        Example:
+            >>> bt = SimpleBacktester(strategy)
+            >>> result = bt.optimize_gradient_descent(
+            ...     param_init={'fast_period': 10.0, 'slow_period': 30.0},
+            ...     param_bounds={
+            ...         'fast_period': (2.0, 50.0),
+            ...         'slow_period': (10.0, 100.0)
+            ...     },
+            ...     learning_rate=0.05,
+            ...     max_iterations=50
+            ... )
+            >>> print(f"Optimized params: {result.best_params}")
+            >>> print(f"Final validation Sharpe: {result.validate_metrics['sharpe']}")
+        """
+        # Validate selection criterion
+        valid_criteria = {"train", "validate", "test"}
+        if selection_criterion not in valid_criteria:
+            raise ValueError(
+                f"selection_criterion must be one of {valid_criteria}, "
+                f"got '{selection_criterion}'"
+            )
+        
+        # Validate parameters
+        if not param_init:
+            raise ValueError("param_init must not be empty")
+        if set(param_init.keys()) != set(param_bounds.keys()):
+            raise ValueError("param_init and param_bounds must have the same keys")
+        
+        # Get data length from the strategy's data source
+        source = self.strategy.positions[list(self.strategy.positions.keys())[0]].source
+        data_length = len(source.data)
+        
+        # Create the split
+        split = create_train_validate_test_split(
+            data_length,
+            train_ratio,
+            validate_ratio,
+            test_ratio
+        )
+        
+        valid_metrics = {"final_cash", "total_return", "sharpe", "max_drawdown", "trades"}
+        
+        # Helper to create sliced strategy
+        def create_split_strategy(params_dict: dict, split_mode: DataSplitMode):
+            """Create a strategy copy with data sliced to the specified split."""
+            strat_copy = copy.deepcopy(self.strategy)
+            for k, v in params_dict.items():
+                # Convert float to int if the strategy expects integer parameters
+                if isinstance(v, float) and v == int(v):
+                    v = int(v)
+                setattr(strat_copy, k, v)
+            
+            # Slice each data source to the appropriate split
+            for key, broker in strat_copy.positions.items():
+                source = broker.source
+                if split_mode == DataSplitMode.TRAIN:
+                    start, end = split.train_start, split.train_end
+                elif split_mode == DataSplitMode.VALIDATE:
+                    start, end = split.validate_start, split.validate_end
+                else:  # TEST
+                    start, end = split.test_start, split.test_end
+                
+                sliced_df = source.data.iloc[start:end].copy()
+                from .datasource import DataSource
+                new_source = DataSource(sliced_df)
+                broker.source = new_source
+                # Also update the strategy's data dictionary
+                strat_copy.data[key] = new_source
+                
+            return strat_copy
+        
+        # Function to evaluate parameters on a specific split
+        def evaluate_params(params_dict: dict, split_mode: DataSplitMode) -> float:
+            """Evaluate objective function on specified split."""
+            strat_copy = create_split_strategy(params_dict, split_mode)
+            bt = SimpleBacktester(
+                strat_copy,
+                cash=self.cash,
+                commission=self.commission,
+                commission_type=self.commission_type,
+                lot_size=self.lot_size,
+            )
+            report = bt.run(progress_bar=False)
+            metrics = _compute_backtest_metrics(report)
+            
+            if objective in valid_metrics:
+                score = metrics.get(objective)
+            else:
+                score = getattr(report, objective, None)
+                if callable(score):
+                    score = score()
+            
+            if score is None or not np.isfinite(float(score)):  # type: ignore[arg-type]
+                return -np.inf
+            
+            return float(score)  # type: ignore[arg-type]
+        
+        # Compute numerical gradient
+        def compute_gradient(params: dict, eps: float = 1e-5) -> dict:
+            """Compute numerical gradient using central differences."""
+            grad = {}
+            for key in params:
+                params_plus = params.copy()
+                params_minus = params.copy()
+                params_plus[key] = params[key] + eps
+                params_minus[key] = params[key] - eps
+                
+                # Use validation set for gradient computation
+                f_plus = evaluate_params(params_plus, DataSplitMode.VALIDATE)
+                f_minus = evaluate_params(params_minus, DataSplitMode.VALIDATE)
+                
+                grad[key] = (f_plus - f_minus) / (2 * eps)
+            
+            return grad
+        
+        # Gradient descent optimization
+        current_params = param_init.copy()
+        velocities = {k: 0.0 for k in current_params}
+        
+        iteration_history = []
+        best_params = current_params.copy()
+        best_score = -np.inf
+        
+        param_names = list(current_params.keys())
+        
+        iterator = range(max_iterations)
+        if progress_bar:
+            iterator = tqdm(iterator, desc="Gradient Descent")
+        
+        for iteration in iterator:
+            # Compute gradient
+            gradient = compute_gradient(current_params)
+            
+            # Check for convergence (gradient magnitude)
+            grad_magnitude = np.sqrt(sum(g**2 for g in gradient.values()))
+            if grad_magnitude < tolerance:
+                if progress_bar:
+                    print(f"\nConverged at iteration {iteration}")
+                break
+            
+            # Update velocities with momentum
+            for key in param_names:
+                velocities[key] = momentum * velocities[key] - learning_rate * gradient[key]
+            
+            # Update parameters
+            for key in param_names:
+                current_params[key] += velocities[key]
+                
+                # Apply bounds
+                min_val, max_val = param_bounds[key]
+                current_params[key] = np.clip(current_params[key], min_val, max_val)
+            
+            # Evaluate on all splits
+            train_score = evaluate_params(current_params, DataSplitMode.TRAIN)
+            validate_score = evaluate_params(current_params, DataSplitMode.VALIDATE)
+            test_score = evaluate_params(current_params, DataSplitMode.TEST)
+            
+            # Track best parameters based on selection criterion
+            if selection_criterion == "validate" and validate_score > best_score:
+                best_score = validate_score
+                best_params = current_params.copy()
+            elif selection_criterion == "train" and train_score > best_score:
+                best_score = train_score
+                best_params = current_params.copy()
+            elif selection_criterion == "test" and test_score > best_score:
+                best_score = test_score
+                best_params = current_params.copy()
+            
+            # Record iteration history
+            row = current_params.copy()
+            row["iteration"] = iteration
+            row["train_score"] = train_score
+            row["validate_score"] = validate_score
+            row["test_score"] = test_score
+            row["gradient_magnitude"] = grad_magnitude
+            iteration_history.append(row)
+        
+        # Create history DataFrame
+        history_df = pd.DataFrame(iteration_history)
+        
+        # Get final reports for best parameters
+        train_report = None
+        validate_report = None
+        test_report = None
+        train_metrics = {}
+        validate_metrics = {}
+        test_metrics = {}
+        
+        for mode, report_attr, metrics_attr in [
+            (DataSplitMode.TRAIN, 'train_report', 'train_metrics'),
+            (DataSplitMode.VALIDATE, 'validate_report', 'validate_metrics'),
+            (DataSplitMode.TEST, 'test_report', 'test_metrics'),
+        ]:
+            strat_copy = create_split_strategy(best_params, mode)
+            bt = SimpleBacktester(
+                strat_copy,
+                cash=self.cash,
+                commission=self.commission,
+                commission_type=self.commission_type,
+                lot_size=self.lot_size,
+            )
+            report = bt.run(progress_bar=False)
+            metrics = _compute_backtest_metrics(report)
+            
+            if mode == DataSplitMode.TRAIN:
+                train_report = report
+                train_metrics = metrics
+            elif mode == DataSplitMode.VALIDATE:
+                validate_report = report
+                validate_metrics = metrics
+            else:
+                test_report = report
+                test_metrics = metrics
+        
+        return OptimizationResult(
+            best_params=best_params,
+            train_report=train_report,
+            validate_report=validate_report,
+            test_report=test_report,
+            train_metrics=train_metrics,
+            validate_metrics=validate_metrics,
+            test_metrics=test_metrics,
+            all_results=history_df
+        )

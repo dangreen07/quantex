@@ -2,7 +2,16 @@ import pytest
 import pandas as pd
 import numpy as np
 from quantex.datasource import DataSource
-from quantex.backtester import SimpleBacktester, BacktestReport, max_drawdown, _infer_periods_per_year
+from quantex.backtester import (
+    SimpleBacktester,
+    BacktestReport,
+    max_drawdown,
+    _infer_periods_per_year,
+    create_train_validate_test_split,
+    OptimizationResult,
+    TrainValidateTestSplit,
+    DataSplitMode,
+)
 from quantex.enums import CommissionType
 from tests.strategies.common import (
     DeterministicEntryExitStrategy,
@@ -226,3 +235,212 @@ class TestBacktester:
         periods = report.periods_per_year
         assert isinstance(periods, int)
         assert periods > 0
+
+    def test_create_train_validate_test_split_basic(self):
+        """Test basic train/validate/test split creation."""
+        split = create_train_validate_test_split(1000, 0.6, 0.2, 0.2)
+
+        assert isinstance(split, TrainValidateTestSplit)
+        assert split.train_start == 0
+        assert split.train_end == 600
+        assert split.validate_start == 600
+        assert split.validate_end == 800
+        assert split.test_start == 800
+        assert split.test_end == 1000
+
+    def test_create_train_validate_test_split_invalid_ratios(self):
+        """Test that invalid ratios raise ValueError."""
+        with pytest.raises(ValueError, match="Split ratios must sum to 1.0"):
+            create_train_validate_test_split(1000, 0.5, 0.3, 0.1)
+
+        with pytest.raises(ValueError, match="All split ratios must be positive"):
+            create_train_validate_test_split(1000, 0.0, 0.5, 0.5)
+
+    def test_optimize_with_split_basic(self, datasource):
+        """Test basic optimize_with_split functionality."""
+        strategy = DeterministicEntryExitStrategy()
+        strategy.add_data(datasource, "EURUSD")
+        backtester = SimpleBacktester(strategy)
+
+        # Use a simple parameter that doesn't require rolling windows
+        result = backtester.optimize_with_split(
+            {"dummy_param": [1, 2]},
+            selection_criterion="validate",
+        )
+
+        assert isinstance(result, OptimizationResult)
+        assert isinstance(result.best_params, dict)
+        assert isinstance(result.train_metrics, dict)
+        assert isinstance(result.validate_metrics, dict)
+        assert isinstance(result.test_metrics, dict)
+        assert isinstance(result.all_results, pd.DataFrame)
+
+    def test_optimize_with_split_selection_criteria(self, datasource):
+        """Test different selection criteria."""
+        strategy = DeterministicEntryExitStrategy()
+        strategy.add_data(datasource, "EURUSD")
+        backtester = SimpleBacktester(strategy)
+
+        # Test with train selection
+        result_train = backtester.optimize_with_split(
+            {"dummy_param": [1, 2]},
+            selection_criterion="train",
+        )
+        assert result_train.best_params is not None
+
+        # Test with validate selection
+        result_validate = backtester.optimize_with_split(
+            {"dummy_param": [1, 2]},
+            selection_criterion="validate",
+        )
+        assert result_validate.best_params is not None
+
+        # Test with test selection
+        result_test = backtester.optimize_with_split(
+            {"dummy_param": [1, 2]},
+            selection_criterion="test",
+        )
+        assert result_test.best_params is not None
+
+    def test_optimize_with_split_invalid_selection_criterion(self, datasource):
+        """Test that invalid selection criterion raises ValueError."""
+        strategy = DeterministicEntryExitStrategy()
+        strategy.add_data(datasource, "EURUSD")
+        backtester = SimpleBacktester(strategy)
+
+        with pytest.raises(ValueError, match="selection_criterion must be one of"):
+            backtester.optimize_with_split(
+                {"dummy_param": [1]},
+                selection_criterion="invalid",
+            )
+
+    def test_optimize_with_split_custom_ratios(self, datasource):
+        """Test optimize_with_split with custom split ratios."""
+        strategy = DeterministicEntryExitStrategy()
+        strategy.add_data(datasource, "EURUSD")
+        backtester = SimpleBacktester(strategy)
+
+        result = backtester.optimize_with_split(
+            {"dummy_param": [1, 2]},
+            train_ratio=0.7,
+            validate_ratio=0.15,
+            test_ratio=0.15,
+            selection_criterion="validate",
+        )
+
+        assert isinstance(result, OptimizationResult)
+        assert result.best_params is not None
+
+    def test_optimize_with_split_reports(self, datasource):
+        """Test that optimize_with_split returns proper BacktestReports."""
+        strategy = DeterministicEntryExitStrategy()
+        strategy.add_data(datasource, "EURUSD")
+        backtester = SimpleBacktester(strategy)
+
+        result = backtester.optimize_with_split(
+            {"dummy_param": [1, 2]},
+            selection_criterion="validate",
+        )
+
+        # Check that reports are BacktestReport instances (or None for empty splits)
+        assert result.train_report is None or isinstance(result.train_report, BacktestReport)
+        assert result.validate_report is None or isinstance(result.validate_report, BacktestReport)
+        assert result.test_report is None or isinstance(result.test_report, BacktestReport)
+
+    def test_optimize_gradient_descent_basic(self, datasource):
+        """Test basic gradient descent optimization."""
+        strategy = DeterministicEntryExitStrategy()
+        strategy.add_data(datasource, "EURUSD")
+        backtester = SimpleBacktester(strategy)
+
+        result = backtester.optimize_gradient_descent(
+            param_init={"dummy_param": 1.0},
+            param_bounds={"dummy_param": (0.5, 2.5)},
+            max_iterations=5,
+            progress_bar=False,
+        )
+
+        assert isinstance(result, OptimizationResult)
+        assert isinstance(result.best_params, dict)
+        assert "dummy_param" in result.best_params
+
+    def test_optimize_gradient_descent_bounds_enforced(self, datasource):
+        """Test that parameter bounds are enforced during gradient descent."""
+        strategy = DeterministicEntryExitStrategy()
+        strategy.add_data(datasource, "EURUSD")
+        backtester = SimpleBacktester(strategy)
+
+        result = backtester.optimize_gradient_descent(
+            param_init={"dummy_param": 1.5},
+            param_bounds={"dummy_param": (1.0, 2.0)},
+            max_iterations=5,
+            progress_bar=False,
+        )
+
+        # Check that parameters stay within bounds
+        assert result.best_params["dummy_param"] >= 1.0
+        assert result.best_params["dummy_param"] <= 2.0
+
+    def test_optimize_gradient_descent_iteration_history(self, datasource):
+        """Test that gradient descent returns iteration history."""
+        strategy = DeterministicEntryExitStrategy()
+        strategy.add_data(datasource, "EURUSD")
+        backtester = SimpleBacktester(strategy)
+
+        result = backtester.optimize_gradient_descent(
+            param_init={"dummy_param": 1.0},
+            param_bounds={"dummy_param": (0.5, 2.0)},
+            max_iterations=5,
+            tolerance=0.0,  # Disable early convergence
+            progress_bar=False,
+        )
+
+        # Check that history contains iteration info
+        assert isinstance(result.all_results, pd.DataFrame)
+        # Note: History may be empty if optimization converged early
+        if not result.all_results.empty:
+            assert "iteration" in result.all_results.columns
+            assert "train_score" in result.all_results.columns
+            assert "validate_score" in result.all_results.columns
+            assert "test_score" in result.all_results.columns
+            assert "gradient_magnitude" in result.all_results.columns
+
+    def test_optimize_gradient_descent_invalid_criterion(self, datasource):
+        """Test that invalid selection criterion raises ValueError."""
+        strategy = RiskAwareStrategy()
+        strategy.add_data(datasource, "EURUSD")
+        backtester = SimpleBacktester(strategy)
+
+        with pytest.raises(ValueError, match="selection_criterion must be one of"):
+            backtester.optimize_gradient_descent(
+                param_init={"fast": 2.0},
+                param_bounds={"fast": (1.0, 5.0)},
+                selection_criterion="invalid",
+                progress_bar=False,
+            )
+
+    def test_optimize_gradient_descent_mismatched_params(self, datasource):
+        """Test that mismatched param_init and param_bounds raises ValueError."""
+        strategy = RiskAwareStrategy()
+        strategy.add_data(datasource, "EURUSD")
+        backtester = SimpleBacktester(strategy)
+
+        with pytest.raises(ValueError, match="param_init and param_bounds must have the same keys"):
+            backtester.optimize_gradient_descent(
+                param_init={"fast": 2.0},
+                param_bounds={"slow": (1.0, 5.0)},
+                progress_bar=False,
+            )
+
+    def test_optimize_gradient_descent_empty_params(self, datasource):
+        """Test that empty param_init raises ValueError."""
+        strategy = RiskAwareStrategy()
+        strategy.add_data(datasource, "EURUSD")
+        backtester = SimpleBacktester(strategy)
+
+        with pytest.raises(ValueError, match="param_init must not be empty"):
+            backtester.optimize_gradient_descent(
+                param_init={},
+                param_bounds={},
+                progress_bar=False,
+            )

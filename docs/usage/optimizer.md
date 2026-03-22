@@ -1,11 +1,16 @@
 # Optimization Guide
 
-This guide explains the optimization features that Quantex currently provides.
+This guide explains the optimization features that Quantex provides.
 
-The current implementation supports grid search over parameter combinations through:
+The implementation supports:
 
-- [`SimpleBacktester.optimize()`](../../src/quantex/backtester.py:485)
-- [`SimpleBacktester.optimize_parallel()`](../../src/quantex/backtester.py:659)
+- **Grid search** over parameter combinations via:
+  - [`SimpleBacktester.optimize()`](../../src/quantex/backtester.py:709)
+  - [`SimpleBacktester.optimize_parallel()`](../../src/quantex/backtester.py:868)
+- **Train/Validate/Test split optimization** via:
+  - [`SimpleBacktester.optimize_with_split()`](../../src/quantex/backtester.py:1045)
+- **Gradient descent optimization** via:
+  - [`SimpleBacktester.optimize_gradient_descent()`](../../src/quantex/backtester.py:1328)
 
 This guide focuses on what those methods actually do in the current codebase.
 
@@ -13,12 +18,12 @@ This guide focuses on what those methods actually do in the current codebase.
 
 Optimization in Quantex means:
 
-1. choose one or more strategy attributes to vary
-2. provide candidate values for each attribute
-3. run a separate backtest for each valid combination
-4. compare the resulting metrics
+1. Choose one or more strategy attributes to vary
+2. Provide candidate values (grid search) or continuous bounds (gradient descent)
+3. Run a separate backtest for each valid combination
+4. Compare the resulting metrics
 
-The optimizer does not do Bayesian optimization, evolutionary search, or walk-forward validation automatically. It performs exhaustive grid search.
+The optimizer performs exhaustive grid search or gradient-based optimization with built-in train/validate/test splits to prevent overfitting.
 
 ## Basic example
 
@@ -288,19 +293,6 @@ print(best_report)
 best_report.plot()
 ```
 
-## Overfitting warning
-
-Optimization can easily produce attractive in-sample results that do not generalize.
-
-Quantex currently gives you the grid search machinery, but it does not automatically perform:
-
-- train/test splits for optimization runs
-- walk-forward analysis
-- cross-validation
-- stability analysis
-
-If you need those workflows, build them around [`DataSource`](../../src/quantex/datasource.py:6), [`SimpleBacktester`](../../src/quantex/backtester.py:356), and your own experiment code.
-
 ## Performance considerations
 
 ### Use sequential search when
@@ -317,27 +309,185 @@ If you need those workflows, build them around [`DataSource`](../../src/quantex/
 
 The parallel implementation keeps a copy of the strategy in each worker, so memory usage scales with worker count.
 
-## What the current optimizer does not include
+## Train/Validate/Test Split Optimization
 
-The current codebase does **not** include:
+Quantex now supports ML-style optimization with train/validate/test splits via [`SimpleBacktester.optimize_with_split()`](../../src/quantex/backtester.py:1045).
 
-- Bayesian optimization
-- evolutionary algorithms
-- native multi-objective optimization
-- built-in walk-forward optimization
-- automatic out-of-sample validation reports
+This approach divides your historical data into three sets:
+- **Training set** (default 60%): Used to fit strategy parameters
+- **Validation set** (default 20%): Used to select the best parameters
+- **Test set** (default 20%): Used for final out-of-sample evaluation
 
-Some older documentation discussed those ideas conceptually, but they are not implemented as first-class library features.
+### Why use train/validate/test splits?
+
+Traditional grid search optimizes on the entire dataset, leading to overfitting. With train/validate/test splits:
+
+1. Parameters are optimized on training data
+2. Best parameters are selected based on validation performance
+3. Final evaluation is performed on held-out test data
+
+### Basic example
+
+```python
+from quantex import SimpleBacktester, CSVDataSource, Strategy
+
+class MovingAverageCross(Strategy):
+    def __init__(self, fast_period=10, slow_period=30):
+        super().__init__()
+        self.fast_period = fast_period
+        self.slow_period = slow_period
+
+    def init(self):
+        self.add_data(CSVDataSource("data.csv"), "TEST")
+        # ... indicator setup ...
+
+    def next(self):
+        # ... trading logic ...
+
+strategy = MovingAverageCross()
+backtester = SimpleBacktester(strategy, cash=10_000)
+
+# Grid search with train/validate/test splits
+result = backtester.optimize_with_split(
+    {
+        "fast_period": [5, 10, 15, 20],
+        "slow_period": [20, 30, 40, 50],
+    },
+    constraint=lambda p: p["fast_period"] < p["slow_period"],
+    selection_criterion="validate",  # Select best on validation performance
+)
+
+print(f"Best parameters: {result.best_params}")
+print(f"Train Sharpe: {result.train_metrics['sharpe']:.2f}")
+print(f"Validate Sharpe: {result.validate_metrics['sharpe']:.2f}")
+print(f"Test Sharpe: {result.test_metrics['sharpe']:.2f}")
+```
+
+### Custom split ratios
+
+You can customize the train/validate/test split ratios:
+
+```python
+result = backtester.optimize_with_split(
+    params,
+    train_ratio=0.7,      # 70% training
+    validate_ratio=0.15,  # 15% validation
+    test_ratio=0.15,       # 15% test
+    selection_criterion="validate",
+)
+```
+
+### Understanding the results
+
+The [`OptimizationResult`](../../src/quantex/backtester.py:124) object contains:
+
+- `best_params`: Dictionary of best parameter values
+- `train_report`: Full BacktestReport for training data
+- `validate_report`: Full BacktestReport for validation data
+- `test_report`: Full BacktestReport for test data
+- `train_metrics`: Dict of computed metrics for training
+- `validate_metrics`: Dict of computed metrics for validation
+- `test_metrics`: Dict of computed metrics for testing
+- `all_results`: DataFrame with all parameter combinations
+
+## Gradient Descent Optimization
+
+For continuous parameters, Quantex provides gradient descent optimization via [`SimpleBacktester.optimize_gradient_descent()`](../../src/quantex/backtester.py:1328).
+
+This method uses numerical gradients to iteratively optimize strategy parameters, similar to machine learning workflows.
+
+### Features
+
+- **Numerical gradient computation**: Uses central differences to estimate gradients
+- **Momentum-based updates**: Accelerates convergence with momentum
+- **Parameter bounds**: Constrains parameters within specified ranges
+- **Train/validate/test splits**: Prevents overfitting with built-in cross-validation
+- **Convergence detection**: Stops when gradient magnitude falls below tolerance
+
+### Basic example
+
+```python
+result = backtester.optimize_gradient_descent(
+    param_init={
+        'fast_period': 10.0,
+        'slow_period': 30.0,
+    },
+    param_bounds={
+        'fast_period': (2.0, 50.0),
+        'slow_period': (10.0, 100.0),
+    },
+    learning_rate=0.05,      # Step size
+    momentum=0.9,            # Momentum factor
+    max_iterations=50,       # Maximum iterations
+    tolerance=1e-6,          # Convergence threshold
+)
+
+print(f"Optimized parameters: {result.best_params}")
+print(f"Final validation Sharpe: {result.validate_metrics['sharpe']:.2f}")
+
+# View optimization history
+print(result.all_results.tail())
+```
+
+### Hyperparameters
+
+- `learning_rate`: Step size for gradient updates (default: 0.01)
+- `momentum`: Momentum factor for accelerated descent (default: 0.9)
+- `max_iterations`: Maximum number of optimization iterations (default: 100)
+- `tolerance`: Convergence threshold for gradient magnitude (default: 1e-6)
+- `train_ratio`: Fraction of data for training (default: 0.7)
+- `validate_ratio`: Fraction of data for validation (default: 0.15)
+- `test_ratio`: Fraction of data for testing (default: 0.15)
+
+### Interpreting gradient descent results
+
+The returned `all_results` DataFrame contains optimization history:
+
+```python
+# View convergence
+history = result.all_results
+print(history[['iteration', 'validate_score', 'gradient_magnitude']])
+```
+
+## Helper Functions
+
+Quantex provides utility functions for data splitting:
+
+- [`create_train_validate_test_split()`](../../src/quantex/backtester.py:67): Create train/validate/test indices
+- [`DataSplitMode`](../../src/quantex/backtester.py:21): Enum for split modes
+- [`TrainValidateTestSplit`](../../src/quantex/backtester.py:28): Dataclass for split configuration
+
+```python
+from quantex import create_train_validate_test_split
+
+split = create_train_validate_test_split(
+    data_length=1000,
+    train_ratio=0.6,
+    validate_ratio=0.2,
+    test_ratio=0.2,
+)
+
+print(f"Train: {split.train_start}-{split.train_end}")
+print(f"Validate: {split.validate_start}-{split.validate_end}")
+print(f"Test: {split.test_start}-{split.test_end}")
+```
 
 ## Summary
 
-Use [`SimpleBacktester.optimize()`](../../src/quantex/backtester.py:485) or [`SimpleBacktester.optimize_parallel()`](../../src/quantex/backtester.py:659) when you want exhaustive grid search over strategy attributes.
+Quantex provides three optimization approaches:
+
+1. **[`SimpleBacktester.optimize()`](../../src/quantex/backtester.py:709)**: Sequential grid search
+2. **[`SimpleBacktester.optimize_parallel()`](../../src/quantex/backtester.py:868)**: Parallel grid search
+3. **[`SimpleBacktester.optimize_with_split()`](../../src/quantex/backtester.py:1045)**: Grid search with train/validate/test splits
+4. **[`SimpleBacktester.optimize_gradient_descent()`](../../src/quantex/backtester.py:1328)**: Gradient descent with train/validate/test splits
 
 Keep these points in mind:
 
-1. parameters are applied as plain strategy attributes
-2. constraints are optional but often necessary
-3. optimization results are only as meaningful as your validation process
+1. Parameters are applied as plain strategy attributes
+2. Constraints are optional but often necessary
+3. Train/validate/test splits help prevent overfitting
+4. Gradient descent is suitable for continuous parameters
+5. Optimization results are only as meaningful as your validation process
 
 For the underlying simulation model, see [Backtesting guide](./backtesting.md).
 
