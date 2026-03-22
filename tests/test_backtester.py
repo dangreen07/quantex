@@ -444,3 +444,21 @@ class TestBacktester:
                 param_bounds={},
                 progress_bar=False,
             )
+
+    def test_optimize_gradient_descent_integer_params(self, datasource):
+        """Test that integer_params rounds parameters to integers."""
+        strategy = DeterministicEntryExitStrategy()
+        strategy.add_data(datasource, "EURUSD")
+        backtester = SimpleBacktester(strategy)
+
+        result = backtester.optimize_gradient_descent(
+            param_init={"dummy_param": 1.5},
+            param_bounds={"dummy_param": (1.0, 3.0)},
+            integer_params={"dummy_param"},
+            max_iterations=5,
+            tolerance=0.0,
+            progress_bar=False,
+        )
+
+        # Check that the parameter is an integer
+        assert result.best_params["dummy_param"] == int(result.best_params["dummy_param"])

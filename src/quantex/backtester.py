@@ -1344,6 +1344,7 @@ class SimpleBacktester():
         test_ratio: float = 0.15,
         selection_criterion: str = "validate",
         progress_bar: bool = True,
+        integer_params: set[str] | None = None,
     ) -> OptimizationResult:
         """
         Optimize strategy parameters using gradient descent.
@@ -1382,6 +1383,10 @@ class SimpleBacktester():
                 Defaults to "validate".
             progress_bar (bool, optional): Whether to show progress bar.
                 Defaults to True.
+            integer_params (set[str] | None, optional): Set of parameter names
+                that should be treated as integers. These parameters will be
+                rounded to the nearest integer after each gradient update.
+                Defaults to None (all parameters are continuous).
                 
         Returns:
             OptimizationResult: Object containing:
@@ -1395,19 +1400,22 @@ class SimpleBacktester():
                 - all_results: DataFrame with iteration history
                 
         Example:
-            >>> bt = SimpleBacktester(strategy)
+            >>> # Optimize with integer parameters
             >>> result = bt.optimize_gradient_descent(
             ...     param_init={'fast_period': 10.0, 'slow_period': 30.0},
             ...     param_bounds={
             ...         'fast_period': (2.0, 50.0),
             ...         'slow_period': (10.0, 100.0)
             ...     },
+            ...     integer_params={'fast_period', 'slow_period'},
             ...     learning_rate=0.05,
             ...     max_iterations=50
             ... )
             >>> print(f"Optimized params: {result.best_params}")
             >>> print(f"Final validation Sharpe: {result.validate_metrics['sharpe']}")
         """
+        if integer_params is None:
+            integer_params = set()
         # Validate selection criterion
         valid_criteria = {"train", "validate", "test"}
         if selection_criterion not in valid_criteria:
@@ -1545,6 +1553,10 @@ class SimpleBacktester():
                 # Apply bounds
                 min_val, max_val = param_bounds[key]
                 current_params[key] = np.clip(current_params[key], min_val, max_val)
+                
+                # Round integer parameters to nearest integer
+                if key in integer_params:
+                    current_params[key] = round(current_params[key])
             
             # Evaluate on all splits
             train_score = evaluate_params(current_params, DataSplitMode.TRAIN)
