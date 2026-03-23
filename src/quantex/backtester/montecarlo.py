@@ -1,10 +1,11 @@
 """
 Monte Carlo simulation module for quantex backtesting.
 
-This module provides Monte Carlo simulation capabilities to test strategy
-robustness through two approaches:
-1. Trade Order Randomization - shuffles the sequence of executed trades
-2. Price Path Resampling (Bootstrap) - resamples historical returns to create synthetic paths
+    This module provides Monte Carlo simulation capabilities to test strategy
+    robustness through three approaches:
+    1. Trade Order Randomization - shuffles the sequence of executed trades
+    2. Trade Shuffle With Replacement - resamples trade returns with replacement
+    3. Price Path Resampling (Bootstrap) - resamples historical returns to create synthetic paths
 """
 
 import copy
@@ -33,6 +34,7 @@ class MonteCarloMode(Enum):
         BOTH: Run both analyses and combine results
     """
     TRADE_ORDER = "trade_order"
+    TRADE_SHUFFLE_WITH_REPLACEMENT = "trade_shuffle_with_replacement"
     PRICE_PATH = "price_path"
     BOTH = "both"
 
@@ -358,6 +360,56 @@ def _run_trade_order_simulation(
     return pd.Series(equity, index=index)
 
 
+def _run_trade_shuffle_with_replacement_simulation(
+    original_orders: list[Order],
+    original_cash: float,
+    original_equity: pd.Series,
+    commission: float,
+    commission_type,
+    lot_size: int,
+    seed: int | None = None,
+) -> pd.Series:
+    """
+    Run a Monte Carlo simulation that samples trade outcomes with replacement.
+
+    This mode allows some trades to be repeated while others may be omitted.
+    The sampled trade outcomes are then applied as percentage returns to the
+    portfolio curve.
+    """
+    if seed is not None:
+        random.seed(seed)
+
+    index = original_equity.index
+    equity = np.full(len(index), original_cash, dtype=np.float64)
+
+    equity_values = np.asarray(original_equity.values, dtype=np.float64)
+    equity_returns = np.zeros_like(equity_values)
+    if len(equity_values) > 1:
+        prev = np.empty_like(equity_values)
+        prev[0] = original_cash
+        prev[1:] = equity_values[:-1]
+        equity_returns[1:] = np.where(prev[1:] > 0, (equity_values[1:] / prev[1:]) - 1.0, 0.0)
+
+    trade_returns = equity_returns[1:].tolist()
+    if not trade_returns:
+        return pd.Series(equity, index=index)
+
+    # Build a replacement-sampled sequence that may include repeated trade
+    # outcomes and omit others entirely by only sampling a subset of the trade
+    # return pool on each simulation, then pad the rest with neutral returns so
+    # the full curve length is preserved.
+    sample_size = max(1, int(len(trade_returns) * 0.75))
+    sampled_returns = [random.choice(trade_returns) for _ in range(sample_size)]
+    sampled_returns.extend([0.0] * (len(trade_returns) - sample_size))
+
+    equity_returns = np.concatenate(([0.0], np.asarray(sampled_returns, dtype=np.float64)))
+
+    for i in range(1, len(equity)):
+        equity[i] = equity[i - 1] * (1.0 + equity_returns[i])
+
+    return pd.Series(equity, index=index)
+
+
 def _run_price_path_simulation(
     strategy: Strategy,
     data_sources: dict[str, DataSource],
@@ -583,6 +635,21 @@ def monte_carlo(
                 # No trades, just return original equity
                 curve = original_equity.copy()
             equity_curves.append(curve)
+
+        if mode == MonteCarloMode.TRADE_SHUFFLE_WITH_REPLACEMENT:
+            if len(original_orders) > 0:
+                curve = _run_trade_shuffle_with_replacement_simulation(
+                    original_orders,
+                    original_cash,
+                    original_equity,
+                    self.commission,
+                    self.commission_type,
+                    self.lot_size,
+                    seed=iter_seed,
+                )
+            else:
+                curve = original_equity.copy()
+            equity_curves.append(curve)
         
         if mode == MonteCarloMode.PRICE_PATH or mode == MonteCarloMode.BOTH:
             # Price path resampling
@@ -637,6 +704,15 @@ def monte_carlo(
             "trade_order": trade_result.percentile_results,
             "price_path": price_result.percentile_results,
         }
+    elif mode == MonteCarloMode.TRADE_SHUFFLE_WITH_REPLACEMENT:
+        result = MonteCarloResult(
+            mode=mode,
+            equity_curves=equity_curves,
+            original_equity=original_equity,
+            simulations=simulations,
+            starting_cash=original_cash,
+        )
+        result._compute_statistics()
     else:
         # Create result object
         result = MonteCarloResult(

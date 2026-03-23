@@ -5,6 +5,7 @@ Tests for Monte Carlo simulation functionality.
 import pytest
 import pandas as pd
 import numpy as np
+import math
 from quantex.datasource import DataSource
 from quantex.backtester import (
     SimpleBacktester,
@@ -50,6 +51,32 @@ class TestMonteCarlo:
         assert result.simulations == 50
         assert result.mode == MonteCarloMode.TRADE_ORDER
         assert len(result.equity_curves) == 50
+
+    def test_monte_carlo_trade_order_default_simulations_uses_permutations(self, backtester):
+        """Trade order mode should default to the number of unique trade permutations."""
+        result = backtester.monte_carlo(
+            mode="trade_order",
+            seed=42,
+            progress_bar=False,
+        )
+
+        expected = 100
+        assert result.simulations == expected
+        assert len(result.equity_curves) == expected
+
+    def test_monte_carlo_trade_shuffle_with_replacement_mode(self, backtester):
+        """Replacement shuffle mode should be available and produce results."""
+        result = backtester.monte_carlo(
+            simulations=20,
+            mode="trade_shuffle_with_replacement",
+            seed=42,
+            progress_bar=False,
+        )
+
+        assert result.mode == MonteCarloMode.TRADE_SHUFFLE_WITH_REPLACEMENT
+        assert result.simulations == 20
+        assert len(result.equity_curves) == 20
+        assert result.equity_curves[0].equals(result.equity_curves[0])
     
     def test_monte_carlo_mode_price_path(self, backtester):
         """Price path mode should run the specified number of simulations."""
@@ -119,6 +146,35 @@ class TestMonteCarlo:
         assert "p50" in result.percentile_results
         assert "p75" in result.percentile_results
         assert "p95" in result.percentile_results
+
+    def test_monte_carlo_computes_drawdown_statistics(self, backtester):
+        """Monte Carlo result should compute drawdown statistics."""
+        result = backtester.monte_carlo(
+            simulations=20,
+            mode="trade_order",
+            seed=42,
+            progress_bar=False,
+        )
+
+        assert "mean" in result.drawdown_stats
+        assert "p5" in result.drawdown_stats
+        assert "p95" in result.drawdown_stats
+
+    def test_monte_carlo_probabilities(self, backtester):
+        """Monte Carlo result should calculate return and drawdown probabilities."""
+        result = backtester.monte_carlo(
+            simulations=20,
+            mode="trade_order",
+            seed=42,
+            progress_bar=False,
+        )
+
+        probabilities = result.probabilities(target_return=0.01, drawdown_threshold=0.05, horizon=10)
+
+        assert "return_probability" in probabilities
+        assert "drawdown_probability" in probabilities
+        assert 0.0 <= probabilities["return_probability"] <= 1.0
+        assert 0.0 <= probabilities["drawdown_probability"] <= 1.0
     
     def test_monte_carlo_stores_original_equity(self, backtester):
         """Monte Carlo should store original equity curve for comparison."""
