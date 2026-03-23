@@ -340,8 +340,10 @@ def _run_trade_order_simulation(
     equity_values = np.asarray(original_equity.values, dtype=np.float64)
     equity_returns = np.zeros_like(equity_values)
     if len(equity_values) > 1:
-        prev = np.where(np.arange(len(equity_values)) == 0, original_cash, equity_values[:-1])
-        equity_returns[1:] = np.where(prev > 0, (equity_values[1:] / prev) - 1.0, 0.0)
+        prev = np.empty_like(equity_values)
+        prev[0] = original_cash
+        prev[1:] = equity_values[:-1]
+        equity_returns[1:] = np.where(prev[1:] > 0, (equity_values[1:] / prev[1:]) - 1.0, 0.0)
 
     # Keep the starting cash anchored at index 0 and randomize the remaining
     # returns so the path always begins from the actual initial capital.
