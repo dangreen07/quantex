@@ -6,7 +6,7 @@ from .backtester import (
     OptimizationResult as OptimizationResult,
     TrainValidateTestSplit as TrainValidateTestSplit,
     DataSplitMode as DataSplitMode,
+    CommissionType as CommissionType,
     create_train_validate_test_split as create_train_validate_test_split,
 )
-from .enums import CommissionType as CommissionType
 from .indicators import indicators as indicators

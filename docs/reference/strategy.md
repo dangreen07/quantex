@@ -4,6 +4,4 @@
 
 ## Source code
 
-```python
---8<-- "src/quantex/strategy.py"
-```
+- [`src/quantex/strategy.py`](../../src/quantex/strategy.py) - Base Strategy class for trading strategies

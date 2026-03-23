@@ -1,558 +1,26 @@
-from dataclasses import dataclass
-import math
-from matplotlib import pyplot as plt
-import numpy as np
-import pandas as pd
-
-from .broker import Order, OrderSide
-from .strategy import Strategy
-from .enums import CommissionType
 import copy
 import itertools
-from typing import Callable, Any
-from tqdm import tqdm
-import concurrent.futures
-import pickle
 import os
-import gc
-from enum import Enum
+from typing import Any, Callable
+
+import numpy as np
+import pandas as pd
+from tqdm import tqdm
+
+from ..broker import Order
+from ..strategy import Strategy
+
+from .constants import CommissionType, DataSplitMode
+from .data_splits import create_train_validate_test_split
+from .metrics import (
+    _compute_backtest_metrics,
+    _risk_tolerance_passes,
+)
+from .parallel import _worker_eval, _worker_init
+from .reports import BacktestReport, OptimizationResult
 
 
-class DataSplitMode(Enum):
-    """Enumeration for data split modes in optimization."""
-    TRAIN = "train"
-    VALIDATE = "validate"
-    TEST = "test"
-
-
-@dataclass
-class TrainValidateTestSplit:
-    """
-    Container for train/validate/test data splits.
-    
-    This class holds the split configuration and indices for dividing
-    historical data into training, validation, and test sets for
-    machine learning-style optimization workflows.
-    
-    Attributes:
-        train_start (int): Starting index for training data.
-        train_end (int): Ending index for training data.
-        validate_start (int): Starting index for validation data.
-        validate_end (int): Ending index for validation data.
-        test_start (int): Starting index for test data.
-        test_end (int): Ending index for test data.
-        train_ratio (float): Ratio of data used for training.
-        validate_ratio (float): Ratio of data used for validation.
-        test_ratio (float): Ratio of data used for testing.
-    """
-    train_start: int
-    train_end: int
-    validate_start: int
-    validate_end: int
-    test_start: int
-    test_end: int
-    train_ratio: float = 0.6
-    validate_ratio: float = 0.2
-    test_ratio: float = 0.2
-    
-    def __post_init__(self):
-        """Validate split ratios sum to 1.0."""
-        total = self.train_ratio + self.validate_ratio + self.test_ratio
-        if not np.isclose(total, 1.0):
-            raise ValueError(
-                f"Split ratios must sum to 1.0, got {total:.3f}"
-            )
-
-
-def create_train_validate_test_split(
-    data_length: int,
-    train_ratio: float = 0.6,
-    validate_ratio: float = 0.2,
-    test_ratio: float = 0.2
-) -> TrainValidateTestSplit:
-    """
-    Create indices for train/validate/test split.
-    
-    This function divides the data indices into three sets for ML-style
-    optimization: training (parameter fitting), validation (hyperparameter
-    selection), and testing (final evaluation).
-    
-    Args:
-        data_length (int): Total number of data points.
-        train_ratio (float, optional): Fraction of data for training.
-            Defaults to 0.6 (60%).
-        validate_ratio (float, optional): Fraction of data for validation.
-            Defaults to 0.2 (20%).
-        test_ratio (float, optional): Fraction of data for testing.
-            Defaults to 0.2 (20%).
-            
-    Returns:
-        TrainValidateTestSplit: Object containing start/end indices for
-            each split.
-            
-    Raises:
-        ValueError: If ratios don't sum to 1.0 or are invalid.
-        
-    Example:
-        >>> split = create_train_validate_test_split(1000, 0.6, 0.2, 0.2)
-        >>> print(f"Train: {split.train_start}-{split.train_end}")
-        >>> print(f"Validate: {split.validate_start}-{split.validate_end}")
-        >>> print(f"Test: {split.test_start}-{split.test_end}")
-    """
-    if not np.isclose(train_ratio + validate_ratio + test_ratio, 1.0):
-        raise ValueError("Split ratios must sum to 1.0")
-    
-    if train_ratio <= 0 or validate_ratio <= 0 or test_ratio <= 0:
-        raise ValueError("All split ratios must be positive")
-    
-    train_end = int(data_length * train_ratio)
-    validate_end = int(data_length * (train_ratio + validate_ratio))
-    
-    return TrainValidateTestSplit(
-        train_start=0,
-        train_end=train_end,
-        validate_start=train_end,
-        validate_end=validate_end,
-        test_start=validate_end,
-        test_end=data_length,
-        train_ratio=train_ratio,
-        validate_ratio=validate_ratio,
-        test_ratio=test_ratio
-    )
-
-
-@dataclass
-class OptimizationResult:
-    """
-    Container for optimization results with train/validate/test splits.
-    
-    This class holds the complete results of an optimization run that
-    includes evaluation on all three data splits, enabling proper
-    model selection and generalization assessment.
-    
-    Attributes:
-        best_params (dict): Best parameter values found.
-        train_report: Backtest report for training data.
-        validate_report: Backtest report for validation data.
-        test_report: Backtest report for test data.
-        train_metrics (dict): Computed metrics for training performance.
-        validate_metrics (dict): Computed metrics for validation performance.
-        test_metrics (dict): Computed metrics for test performance.
-        all_results (pd.DataFrame): DataFrame with all parameter combinations
-            and their metrics for each split.
-    """
-    best_params: dict
-    train_report: Any
-    validate_report: Any
-    test_report: Any
-    train_metrics: dict
-    validate_metrics: dict
-    test_metrics: dict
-    all_results: pd.DataFrame
-
-def max_drawdown(equity: pd.Series) -> float:
-    """
-    Calculate the maximum drawdown of an equity curve.
-    
-    The maximum drawdown represents the largest peak-to-trough decline
-    in the equity curve, expressed as a positive percentage.
-    
-    Args:
-        equity (pd.Series): Time series of equity values.
-        
-    Returns:
-        float: Maximum drawdown as a positive percentage (e.g., 0.15 for 15%).
-        
-    Example:
-        >>> equity = pd.Series([100, 110, 95, 105, 90])  
-        >>> max_drawdown(equity)  
-        0.18181818181818182  # ~18.18% drawdown
-    """
-    running_max = equity.cummax()
-    drawdown = (equity - running_max) / running_max
-    max_dd = drawdown.min()
-    return float(abs(max_dd))  # return as positive percentage
-
-def _infer_periods_per_year(index: pd.Index, default: int = 252 * 24 * 60) -> int:
-    """
-    Infer the number of trading periods per year from a datetime index.
-    
-    This function analyzes the time differences in the index to determine
-    the appropriate number of periods per year for annualized calculations.
-    Falls back to minute-level trading (252 trading days * 24 hours * 60 minutes)
-    if the index cannot be analyzed or contains insufficient data.
-    
-    Args:
-        index (pd.Index): DatetimeIndex containing timestamps.
-        default (int, optional): Default periods per year for minute trading.
-            Defaults to 252 * 24 * 60 (minute-level data).
-            
-    Returns:
-        int: Estimated number of trading periods per year.
-        
-    Example:
-        >>> dates = pd.date_range('2020-01-01', periods=100, freq='D')  
-        >>> _infer_periods_per_year(dates)  
-        252  # Daily trading periods
-    """
-    # Simple inference; falls back to minute trading year if uncertain
-    if not isinstance(index, pd.DatetimeIndex) or len(index) < 3:
-        return default
-    dt = np.diff(index.values).astype("timedelta64[s]").astype(float)
-    if not np.isfinite(dt).any():
-        return default
-    med_sec = np.median(dt[dt > 0])
-    if not np.isfinite(med_sec) or med_sec <= 0:
-        return default
-    periods_per_day = 86400.0 / med_sec
-    # Assume 252 trading days/year
-    return int(round(252 * periods_per_day))
-
-def _worker_init(pickled_strategy: bytes, cash: float, commision: float,
-                 commision_type, lot_size: int):
-    """
-    Initializer for worker processes in parallel optimization.
-    
-    This function stores a pickled strategy and backtest configuration
-    in module globals so each worker process can reuse them for
-    parallel parameter optimization.
-    
-    Args:
-        pickled_strategy (bytes): Serialized strategy instance.
-        cash (float): Initial cash amount for backtesting.
-        commision (float): Commission rate for trades.
-        commision_type: Type of commission calculation (CommissionType enum).
-        lot_size (int): Size of trading lots.
-        
-    Note:
-        This function is designed to be called by worker processes
-        during parallel optimization and should not be used directly.
-    """
-    global _WORKER_PICKLED_STRAT, _WORKER_BT_CONFIG
-    _WORKER_PICKLED_STRAT = pickled_strategy
-    _WORKER_BT_CONFIG = {
-        "cash": cash,
-        "commision": commision,
-        "commision_type": commision_type,
-        "lot_size": lot_size,
-    }
-
-def _worker_eval(param_items):
-    """
-    Worker evaluation function for parallel parameter optimization.
-    
-    This function runs in worker processes to evaluate a single
-    parameter combination and return performance metrics.
-    
-    Args:
-        param_items: Sequence of (key, value) pairs (tuple) to reconstruct dict.
-                    Each tuple represents a parameter name and its value.
-                    
-    Returns:
-        dict: Dictionary containing metrics for the evaluated parameters:
-            - 'params': Dictionary of parameter values used
-            - 'final_cash': Final cash amount after backtest
-            - 'total_return': Total return as decimal (e.g., 0.15 for 15%)
-            - 'sharpe': Sharpe ratio (or NaN if invalid)
-            - 'max_drawdown': Maximum drawdown as decimal
-            - 'trades': Number of trades executed
-            
-    Note:
-        This function is designed for use in worker processes during
-        parallel optimization and should not be called directly.
-    """
-    global _WORKER_PICKLED_STRAT, _WORKER_BT_CONFIG
-    # Reconstruct params dict
-    params = dict(param_items)
-
-    # Unpickle a fresh strategy instance for this task
-    strat = pickle.loads(_WORKER_PICKLED_STRAT)
-
-    # Apply param overrides
-    for k, v in params.items():
-        setattr(strat, k, v)
-
-    # Run backtest locally in worker (no progress bar)
-    bt = SimpleBacktester(
-        strat,
-        cash=_WORKER_BT_CONFIG["cash"],
-        commission=_WORKER_BT_CONFIG["commision"],
-        commission_type=_WORKER_BT_CONFIG["commision_type"],
-        lot_size=_WORKER_BT_CONFIG["lot_size"],
-    )
-    report = bt.run(progress_bar=False)
-
-    # Compute metrics (same logic as before)
-    equity = report.PnlRecord.astype(float)
-    returns = equity.pct_change().dropna()
-
-    annual_rf = 0.04
-    rf_per_period = annual_rf / report.periods_per_year
-
-    if len(returns) < 2 or returns.std(ddof=1) == 0:
-        sharpe = float("nan")
-    else:
-        excess = returns - rf_per_period
-        mean = excess.mean()
-        vol = excess.std(ddof=1)
-        sharpe = float((mean / vol) * (report.periods_per_year ** 0.5))
-
-    running_max = equity.cummax()
-    drawdown = ((equity - running_max) / running_max).min()
-    mdd = float(abs(drawdown))
-
-    tot_return = float(equity.iloc[-1] / equity.iloc[0] - 1.0)
-
-    # Keep worker returned payload small — don't send large objects back.
-    result = {
-        "params": params,
-        "final_cash": report.final_cash,
-        "total_return": tot_return,
-        "sharpe": sharpe,
-        "max_drawdown": mdd,
-        "trades": len(report.orders),
-    }
-
-    # Cleanup references to free memory inside worker
-    del strat, bt, report, equity, returns
-    gc.collect()
-
-    return result
-
-def _compute_backtest_metrics(report: "BacktestReport") -> dict[str, Any]:
-    equity = report.PnlRecord.astype(float)
-    returns = equity.pct_change().dropna()
-
-    annual_rf = report.annual_rf
-    rf_per_period = annual_rf / report.periods_per_year
-
-    if len(returns) < 2 or returns.std(ddof=1) == 0:
-        sharpe = float("nan")
-    else:
-        excess = returns - rf_per_period
-        mean = excess.mean()
-        vol = excess.std(ddof=1)
-        sharpe = float((mean / vol) * (report.periods_per_year ** 0.5))
-
-    running_max = equity.cummax()
-    drawdown = ((equity - running_max) / running_max).min()
-    mdd = float(abs(drawdown))
-
-    tot_return = float(equity.iloc[-1] / equity.iloc[0] - 1.0)
-
-    return {
-        "final_cash": report.final_cash,
-        "total_return": tot_return,
-        "sharpe": sharpe,
-        "max_drawdown": mdd,
-        "trades": len(report.orders),
-    }
-
-def _extract_metric_value(report: "BacktestReport", metric: str) -> Any:
-    value = getattr(report, metric, None)
-    if callable(value):
-        value = value()
-    return value
-
-def _risk_tolerance_passes(report: "BacktestReport", risk_tolerance: dict[str, float] | None) -> bool:
-    if not risk_tolerance:
-        return True
-
-    metrics = _compute_backtest_metrics(report)
-    for metric, max_value in risk_tolerance.items():
-        if max_value is None:
-            continue
-        current_value = metrics.get(metric, _extract_metric_value(report, metric))
-        if current_value is None:
-            raise AttributeError(f"BacktestReport does not expose metric '{metric}'")
-        if not np.isfinite(float(current_value)):
-            return False
-        if float(current_value) > float(max_value):
-            return False
-
-    return True
-
-@dataclass
-class BacktestReport:
-    """
-    Container for backtest results and performance metrics.
-    
-    This class encapsulates the complete results of a backtest run,
-    including P&L records, orders executed, and calculated performance
-    metrics such as Sharpe ratio and maximum drawdown.
-    
-    Attributes:
-        starting_cash (np.float64): Initial cash amount at start of backtest.
-        final_cash (np.float64): Final cash amount at end of backtest.
-        PnlRecord (pd.Series): Time series of P&L values throughout the backtest.
-        orders (list[Order]): List of all orders executed during the backtest.
-    """
-    starting_cash: np.float64
-    final_cash: np.float64
-    PnlRecord: pd.Series
-    orders: list[Order]
-    tradeRecord: list[np.float64]
-
-    @property
-    def annual_rf(self):
-        return 0.04
-
-    @property
-    def periods_per_year(self):
-        """
-        Calculate the number of trading periods per year.
-        
-        This property infers the appropriate number of periods per year
-        from the P&L record index, useful for annualized calculations.
-        
-        Returns:
-            int: Number of trading periods per year (e.g., 252 for daily data).
-        """
-        return _infer_periods_per_year(self.PnlRecord.astype(float).index, 252 * 24 * 60)
-    
-    @property
-    def total_return(self):
-        equity = self.PnlRecord.astype(float)
-        tot_return = float(equity.iloc[-1] / equity.iloc[0] - 1.0)
-        return tot_return
-    
-    @property
-    def kelly_criterion(self):
-        winning = 0
-        losing = 0
-        total_wins = 0
-        total_losses = 0
-        for trade in self.tradeRecord:
-            if trade > 0:
-                total_wins += abs(trade)
-                winning += 1
-            elif trade < 0:
-                total_losses += abs(trade)
-                losing += 1
-        if winning + losing == 0:
-            return 0.0
-        if winning == 0:
-            return 0.0
-        if losing == 0:
-            return 1.0
-        W = winning / (winning + losing)
-        avg_win = total_wins / winning
-        avg_loss = total_losses / losing
-        if avg_loss == 0:
-            return 0.0
-        R = avg_win / avg_loss
-        if R == 0:
-            return 0.0
-        kelly = W - (1 - W) / R
-        return kelly
-
-    def plot(self, figsize: tuple = (10, 5)) -> None:
-        """
-        Plot the equity curve and drawdown charts.
-        
-        Creates a two-panel plot showing:
-        1. The equity curve over time
-        2. The drawdown curve as a percentage
-        
-        Args:
-            figsize (tuple, optional): Figure size as (width, height) in inches.
-                Defaults to (10, 5).
-                
-        Note:
-            This method uses matplotlib to display the plots and requires
-            an interactive environment to show the figures.
-        """
-        equity = self.PnlRecord.astype(float)
-        running_max = equity.cummax()
-        drawdown = (equity - running_max) / running_max
-
-        fig, ax = plt.subplots(
-            2, figsize=figsize, sharex=True
-        )
-
-        ax_eq, ax_dd = ax
-
-        ax_eq.plot(equity.index, equity.values, label="Equity", color="tab:blue")
-        ax_eq.set_ylabel("Equity Value")
-        ax_eq.set_title("Equity Curve")
-        ax_eq.legend()
-        ax_eq.grid(alpha=0.3)
-
-        ax_dd.fill_between(
-            drawdown.index,
-            drawdown.values,
-            color="tab:red",
-            alpha=0.3,
-            label="Drawdown",
-        )
-        ax_dd.set_ylabel("Drawdown")
-        ax_dd.set_xlabel("Date")
-        ax_dd.legend()
-        ax_dd.grid(alpha=0.3)
-
-        plt.tight_layout()
-        plt.show()
-
-    def __str__(self) -> str:
-        """
-        Generate a formatted string summary of backtest results.
-        
-        Returns a human-readable string containing key performance
-        metrics including total return, Sharpe ratio with confidence
-        intervals, maximum drawdown, and total number of trades.
-        
-        Returns:
-            str: Formatted string with backtest summary statistics.
-        """
-        equity = self.PnlRecord.astype(float)
-        returns = equity.pct_change().dropna()
-
-        # Risk-free per period from an annual rate
-        rf_per_period = self.annual_rf / self.periods_per_year
-
-        if len(returns) < 2 or returns.std(ddof=1) == 0:
-            sharpe = np.nan
-            lo = np.nan
-            hi = np.nan
-        else:
-            excess = returns - rf_per_period
-            mean = excess.mean()
-            vol = excess.std(ddof=1)
-            sharpe = (mean / vol) * np.sqrt(self.periods_per_year)
-
-            # Standard error of Sharpe (i.i.d. normal approx)
-            n = len(excess)
-            se = np.sqrt((1 + 0.5 * sharpe**2) / n)
-            z = 1.96  # 95% CI
-            lo = sharpe - z * se
-            hi = sharpe + z * se
-
-        # Max drawdown on equity curve
-        running_max = equity.cummax()
-        drawdown = ((equity - running_max) / running_max).min()
-        mdd = float(abs(drawdown))
-
-        tot_return = float(equity.iloc[-1] / equity.iloc[0] - 1.0)
-        annualized_return = float((1.0 + tot_return) ** (self.periods_per_year / max(len(returns), 1)) - 1.0)
-        tot_orders = len(self.orders)
-
-        return (
-            f"Starting Cash: ${self.starting_cash:,.2f}\n"
-            f"Final Cash: ${self.final_cash:,.2f}\n"
-            f"Total Return: {tot_return:,.2%}\n"
-            f"Annualized Return: {annualized_return:,.2%}\n"
-            f"Sharpe Ratio: {sharpe:.2f}" if np.isfinite(sharpe) else
-            f"Sharpe Ratio: nan"
-        ) + (
-            f"\nSharpe Confidence Interval: [{lo:.4f}, {hi:.4f}]"
-            if np.isfinite(sharpe) else "\nSharpe Confidence Interval: [nan, nan]"
-        ) + (
-            f"\nMax Drawdown: {mdd:.2%}\n"
-            f"Kelly Fraction: {self.kelly_criterion:.3}\n"
-            f"Total Trades: {tot_orders:,}"
-        )
-
-class SimpleBacktester():
+class SimpleBacktester:
     """
     Simple backtester for executing trading strategies on historical data.
     
@@ -582,7 +50,7 @@ class SimpleBacktester():
                 commission: float = 0.002, 
                 commission_type: CommissionType = CommissionType.PERCENTAGE,
                 lot_size: int = 1,
-                margin_call: float = 0.5 ## 50% of the cash lost
+                margin_call: float = 0.5  ## 50% of the cash lost
                 ):
         """
         Initialize the backtester with strategy and configuration parameters.
@@ -753,7 +221,7 @@ class SimpleBacktester():
                   best parameter combination.
                 - results (pd.DataFrame): DataFrame with metrics for all valid
                   parameter combinations, sorted by performance.
-                  
+                   
         Raises:
             ValueError: If params is empty or contains parameters with no values.
             TypeError: If any parameter values are not iterable.
@@ -915,7 +383,7 @@ class SimpleBacktester():
             - Uses ProcessPoolExecutor for true parallelism across CPU cores.
             - Memory usage scales with the number of workers as each worker
               maintains a copy of the strategy.
-              
+               
         Performance Tips:
             - For parameter spaces with many combinations (>1000), prefer
               optimize_parallel over optimize for better performance.
@@ -923,7 +391,7 @@ class SimpleBacktester():
               lower multiprocessing overhead.
             - Monitor system memory usage as each worker maintains a full
               copy of the strategy and data.
-              
+               
         Example:
             >>> bt = SimpleBacktester(strategy)  
             >>> # Use 4 workers for parallel optimization  
@@ -932,6 +400,9 @@ class SimpleBacktester():
             ...     workers=4  
             ... )  
         """
+        import concurrent.futures
+        import pickle
+
         if not params:
             raise ValueError("params must not be empty")
 
@@ -1109,6 +580,8 @@ class SimpleBacktester():
             >>> print(f"Validate Sharpe: {result.validate_metrics['sharpe']}")
             >>> print(f"Test Sharpe: {result.test_metrics['sharpe']}")
         """
+        from ..datasource import DataSource
+
         # Validate selection criterion
         valid_criteria = {"train", "validate", "test"}
         if selection_criterion not in valid_criteria:
@@ -1176,12 +649,11 @@ class SimpleBacktester():
                 
                 # Create a new data source with sliced data
                 sliced_df = source.data.iloc[start:end].copy()
-                from .datasource import DataSource
                 new_source = DataSource(sliced_df)
                 broker.source = new_source
                 # Also update the strategy's data dictionary
                 strat_copy.data[key] = new_source
-                
+            
             return strat_copy, split_mode
 
         # Run optimization for each split
@@ -1414,6 +886,8 @@ class SimpleBacktester():
             >>> print(f"Optimized params: {result.best_params}")
             >>> print(f"Final validation Sharpe: {result.validate_metrics['sharpe']}")
         """
+        from ..datasource import DataSource
+
         if integer_params is None:
             integer_params = set()
         # Validate selection criterion
@@ -1465,12 +939,11 @@ class SimpleBacktester():
                     start, end = split.test_start, split.test_end
                 
                 sliced_df = source.data.iloc[start:end].copy()
-                from .datasource import DataSource
                 new_source = DataSource(sliced_df)
                 broker.source = new_source
                 # Also update the strategy's data dictionary
                 strat_copy.data[key] = new_source
-                
+            
             return strat_copy
         
         # Function to evaluate parameters on a specific split

@@ -1,6 +1,12 @@
 from enum import Enum
 
 
+class DataSplitMode(Enum):
+    """Enumeration for data split modes in optimization."""
+    TRAIN = "train"
+    VALIDATE = "validate"
+    TEST = "test"
+
 class CommissionType(Enum):
     """
     Enumeration for commission calculation types.

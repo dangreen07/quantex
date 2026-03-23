@@ -4,6 +4,4 @@
 
 ## Source code
 
-```python
---8<-- "src/quantex/datasource.py"
-```
+- [`src/quantex/datasource.py`](../../src/quantex/datasource.py) - DataSource, CSVDataSource, and ParquetDataSource classes

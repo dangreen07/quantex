@@ -4,6 +4,7 @@
 
 ## Source code
 
-```python
---8<-- "src/quantex/broker.py"
-```
+The broker module handles order execution and position management:
+
+- [`src/quantex/broker/broker.py`](../../src/quantex/broker/broker.py) - Broker class for order execution
+- [`src/quantex/broker/types.py`](../../src/quantex/broker/types.py) - Type definitions (Order, OrderSide, OrderStatus, OrderType)

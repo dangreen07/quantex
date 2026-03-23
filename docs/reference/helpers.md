@@ -4,6 +4,4 @@
 
 ## Source code
 
-```python
---8<-- "src/quantex/helpers.py"
-```
+- [`src/quantex/helpers.py`](../../src/quantex/helpers.py) - Utility functions for trading strategies
