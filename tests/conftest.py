@@ -20,19 +20,3 @@ def ohlcv_data():
         },
         index=dates,
     )
-
-
-@pytest.fixture
-def short_ohlcv_data():
-    """Smaller deterministic OHLCV sample for focused unit tests."""
-    dates = pd.date_range("2020-01-01", periods=10, freq="D")
-    return pd.DataFrame(
-        {
-            "Open": list(range(100, 110)),
-            "High": list(range(105, 115)),
-            "Low": list(range(95, 105)),
-            "Close": list(range(102, 112)),
-            "Volume": [1000] * 10,
-        },
-        index=dates,
-    )
