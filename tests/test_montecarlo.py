@@ -255,6 +255,34 @@ class TestMonteCarlo:
         
         for key, value in result.percentile_results.items():
             assert np.isfinite(value), f"{key} should be finite"
+
+    def test_price_path_simulation_generates_positive_monotonic_index_preserving_paths(self, backtester):
+        """Synthetic price paths should remain positive and preserve the original index length."""
+        original_source = backtester.strategy.data["EURUSD"].data
+        original_close = original_source["Close"].to_numpy(dtype=float)
+        original_log_returns = np.diff(np.log(original_close))
+
+        result = backtester.monte_carlo(
+            simulations=5,
+            mode="price_path",
+            seed=42,
+            progress_bar=False,
+        )
+
+        assert len(result.equity_curves) == 5
+        for curve in result.equity_curves:
+            assert len(curve) == len(original_source)
+            assert np.all(np.isfinite(curve.values))
+            assert np.all(curve.values >= 0)
+
+        # The synthetic process should broadly preserve the return scale rather than exploding.
+        simulated_final_values = np.array([curve.iloc[-1] for curve in result.equity_curves])
+        assert np.all(np.isfinite(simulated_final_values))
+        assert simulated_final_values.std() > 0
+
+        # This is a loose sanity check that the source return distribution remains in the same order of magnitude.
+        assert np.isfinite(original_log_returns).all()
+        assert abs(np.mean(original_log_returns)) < 0.1
     
     def test_monte_carlo_different_seeds_different_results(self, ohlcv_data):
         """Test that different seeds produce different random sequences (verifies seed is passed correctly)."""

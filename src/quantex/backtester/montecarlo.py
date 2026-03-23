@@ -298,32 +298,78 @@ def _run_price_path_simulation(
     synthetic_sources = {}
     
     for symbol, source in data_sources.items():
-        close_prices = source.data['Close'].values
-        
-        # Calculate log returns
+        close_prices = np.asarray(source.data["Close"].values, dtype=np.float64)
+        if len(close_prices) < 2:
+            synthetic_sources[symbol] = DataSource(source.data.copy())
+            continue
+
+        # Use a block-bootstrap on log returns to preserve local serial dependence
+        # and then re-price the path using a geometric Brownian motion style
+        # reconstruction with the sampled return distribution.
         log_returns = np.diff(np.log(close_prices))
-        
-        # Resample with replacement
         n_samples = len(log_returns)
-        resampled_indices = np.random.randint(0, n_samples, size=n_samples)
-        resampled_returns = log_returns[resampled_indices]
-        
-        # Reconstruct price path starting from initial price
-        synthetic_prices = np.zeros(n_samples + 1)
-        synthetic_prices[0] = close_prices[0]
-        synthetic_prices[1:] = close_prices[0] * np.exp(np.cumsum(resampled_returns))
-        
-        # Create synthetic OHLCV data
-        # Use the same pattern but with resampled close prices
-        synthetic_df = source.data.copy()
-        synthetic_df['Close'] = synthetic_prices
-        
-        # Adjust Open, High, Low based on close (simple approximation)
-        # This is a simplification - real implementation would need proper OHLC generation
-        synthetic_df['Open'] = synthetic_prices * (1 + np.random.uniform(-0.001, 0.001, n_samples + 1))
-        synthetic_df['High'] = np.maximum(synthetic_prices, synthetic_df['Open']) * (1 + np.random.uniform(0, 0.002, n_samples + 1))
-        synthetic_df['Low'] = np.minimum(synthetic_prices, synthetic_df['Open']) * (1 - np.random.uniform(0, 0.002, n_samples + 1))
-        
+        block_size = max(2, min(10, int(np.sqrt(n_samples))))
+        synthetic_log_returns = []
+
+        while len(synthetic_log_returns) < n_samples:
+            start = int(np.random.randint(0, n_samples))
+            block = log_returns[start : start + block_size]
+            if len(block) < block_size:
+                wrap = block_size - len(block)
+                block = np.concatenate((block, log_returns[:wrap]))
+            synthetic_log_returns.extend(block.tolist())
+
+        synthetic_log_returns = np.asarray(synthetic_log_returns[:n_samples], dtype=np.float64)
+
+        # Keep the simulated path realistic by matching the original return
+        # center and volatility rather than letting the bootstrap drift too far.
+        original_mean = float(np.mean(log_returns))
+        original_std = float(np.std(log_returns))
+        synthetic_mean = float(np.mean(synthetic_log_returns))
+        synthetic_std = float(np.std(synthetic_log_returns))
+        if synthetic_std > 0 and original_std > 0:
+            synthetic_log_returns = (synthetic_log_returns - synthetic_mean) * (original_std / synthetic_std) + original_mean
+        else:
+            synthetic_log_returns = synthetic_log_returns - synthetic_mean + original_mean
+
+        synthetic_close = np.empty(n_samples + 1, dtype=np.float64)
+        synthetic_close[0] = close_prices[0]
+        synthetic_close[1:] = synthetic_close[0] * np.exp(np.cumsum(synthetic_log_returns))
+        synthetic_close = np.maximum(synthetic_close, np.finfo(np.float64).tiny)
+
+        # Derive intraday range from the historical candle shape so OHLC remains coherent.
+        source_df = source.data.copy()
+        if "Open" in source_df.columns:
+            open_close_gap = np.log(np.asarray(source_df["Open"].values, dtype=np.float64) / close_prices)
+            open_close_gap = np.nan_to_num(open_close_gap, nan=0.0, posinf=0.0, neginf=0.0)
+        else:
+            open_close_gap = np.zeros_like(synthetic_close)
+
+        open_noise = np.random.choice(open_close_gap, size=n_samples + 1, replace=True)
+        synthetic_open = synthetic_close * np.exp(open_noise)
+
+        if {"High", "Low"}.issubset(source_df.columns):
+            high_wick = np.log(np.asarray(source_df["High"].values, dtype=np.float64) / np.maximum(close_prices, np.finfo(np.float64).tiny))
+            low_wick = np.log(np.asarray(source_df["Low"].values, dtype=np.float64) / np.maximum(close_prices, np.finfo(np.float64).tiny))
+            high_wick = np.nan_to_num(high_wick, nan=0.0, posinf=0.0, neginf=0.0)
+            low_wick = np.nan_to_num(low_wick, nan=0.0, posinf=0.0, neginf=0.0)
+            synthetic_high = np.maximum(synthetic_open, synthetic_close) * np.exp(np.abs(np.random.choice(high_wick, size=n_samples + 1, replace=True)))
+            synthetic_low = np.minimum(synthetic_open, synthetic_close) * np.exp(-np.abs(np.random.choice(low_wick, size=n_samples + 1, replace=True)))
+        else:
+            synthetic_high = np.maximum(synthetic_open, synthetic_close)
+            synthetic_low = np.minimum(synthetic_open, synthetic_close)
+
+        synthetic_df = source_df
+        synthetic_df["Close"] = synthetic_close
+        synthetic_df["Open"] = synthetic_open
+        synthetic_df["High"] = np.maximum.reduce([synthetic_high, synthetic_open, synthetic_close])
+        synthetic_df["Low"] = np.minimum.reduce([synthetic_low, synthetic_open, synthetic_close])
+
+        if "Volume" in synthetic_df.columns:
+            volume = np.asarray(source_df["Volume"].values, dtype=np.float64)
+            if len(volume) == n_samples + 1:
+                synthetic_df["Volume"] = np.maximum(0.0, np.random.choice(volume, size=n_samples + 1, replace=True))
+
         synthetic_sources[symbol] = DataSource(synthetic_df)
     
     # Update strategy with synthetic data sources
