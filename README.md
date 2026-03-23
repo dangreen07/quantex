@@ -6,9 +6,9 @@ It gives you a small set of building blocks:
 
 - [`Strategy`](src/quantex/strategy.py:9) for your trading rules
 - [`DataSource`](src/quantex/datasource.py:6) plus [`CSVDataSource`](src/quantex/datasource.py:194) and [`ParquetDataSource`](src/quantex/datasource.py:228) for OHLCV market data
-- [`Broker`](src/quantex/broker.py:113) objects, created automatically per symbol, for order placement and position state
-- [`SimpleBacktester`](src/quantex/backtester.py:356) for simulation and parameter search
-- [`BacktestReport`](src/quantex/backtester.py:188) for results, equity history, and summary statistics
+- [`Broker`](src/quantex/broker/broker.py:113) objects, created automatically per symbol, for order placement and position state
+- [`SimpleBacktester`](src/quantex/backtester/backtester.py:26) for simulation and parameter search
+- [`BacktestReport`](src/quantex/backtester/reports.py:4) for results, equity history, and summary statistics
 
 The project is intentionally small. It does not try to be a full research platform, portfolio database, or live-trading engine. Instead, it focuses on a straightforward workflow: load historical bars, define strategy logic, simulate orders, and inspect the results.
 
@@ -28,8 +28,8 @@ At runtime, a typical Quantex workflow looks like this:
 2. In [`Strategy.init()`](src/quantex/strategy.py:52), attach one or more data sources with [`Strategy.add_data()`](src/quantex/strategy.py:98).
 3. Still in [`Strategy.init()`](src/quantex/strategy.py:52), build indicator arrays with the built-in indicator catalog on `self.ta` or the package-level [`indicators`](src/quantex/indicators.py), then register them with [`Strategy.Indicator()`](src/quantex/strategy.py:126).
 4. In [`Strategy.next()`](src/quantex/strategy.py:71), read the current bar through properties such as [`DataSource.COpen`](src/quantex/datasource.py:145) and [`DataSource.CClose`](src/quantex/datasource.py:175), then place orders through the broker stored in [`Strategy.positions`](src/quantex/strategy.py:47).
-5. Run the strategy with [`SimpleBacktester.run()`](src/quantex/backtester.py:414).
-6. Inspect the returned [`BacktestReport`](src/quantex/backtester.py:188), including [`BacktestReport.total_return`](src/quantex/backtester.py:227), [`BacktestReport.periods_per_year`](src/quantex/backtester.py:214), [`BacktestReport.plot()`](src/quantex/backtester.py:252), and the printable summary from [`BacktestReport.__str__()`](src/quantex/backtester.py:299).
+5. Run the strategy with [`SimpleBacktester.run()`](src/quantex/backtester/backtester.py:414).
+6. Inspect the returned [`BacktestReport`](src/quantex/backtester/reports.py:4), including [`BacktestReport.total_return`](src/quantex/backtester/reports.py:68), [`BacktestReport.periods_per_year`](src/quantex/backtester/reports.py:58), [`BacktestReport.plot()`](src/quantex/backtester/reports.py:87), and the printable summary from [`BacktestReport.__str__()`](src/quantex/backtester/reports.py:101).
 
 ## Usage
 
@@ -105,22 +105,22 @@ report.plot()
 
 ### 4. Understand what happens during the backtest
 
-When you call [`SimpleBacktester.run()`](src/quantex/backtester.py:414):
+When you call [`SimpleBacktester.run()`](src/quantex/backtester/backtester.py:414):
 
-- the backtester deep-copies your strategy in [`SimpleBacktester.__init__()`](src/quantex/backtester.py:380)
-- starting cash is split evenly across all attached symbols in [`SimpleBacktester.run()`](src/quantex/backtester.py:439)
+- the backtester deep-copies your strategy in [`SimpleBacktester.__init__()`](src/quantex/backtester/backtester.py:26)
+- starting cash is split evenly across all attached symbols in [`SimpleBacktester.run()`](src/quantex/backtester/backtester.py:439)
 - each data source advances one bar at a time by updating [`DataSource.current_index`](src/quantex/datasource.py:62)
-- each symbol's broker processes pending orders through [`Broker._iterate()`](src/quantex/broker.py:483)
+- each symbol's broker processes pending orders through [`Broker._iterate()`](src/quantex/broker/broker.py:483)
 - market orders execute at the current bar's open price through [`DataSource.COpen`](src/quantex/datasource.py:145)
-- equity is tracked into the final [`BacktestReport.PnlRecord`](src/quantex/backtester.py:205)
+- equity is tracked into the final [`BacktestReport.PnlRecord`](src/quantex/backtester/reports.py:52)
 
 ### 5. Understand order sizing
 
 Order sizing in Quantex is simple but important:
 
-- [`Broker.buy()`](src/quantex/broker.py:159) treats `quantity` as a fraction of available cash unless you pass `amount`
-- [`Broker.sell()`](src/quantex/broker.py:235) uses the same sizing calculation and can open or increase a short position
-- [`Broker.close()`](src/quantex/broker.py:307) places a market order that offsets the current position
+- [`Broker.buy()`](src/quantex/broker/broker.py:159) treats `quantity` as a fraction of available cash unless you pass `amount`
+- [`Broker.sell()`](src/quantex/broker/broker.py:235) uses the same sizing calculation and can open or increase a short position
+- [`Broker.close()`](src/quantex/broker/broker.py:307) places a market order that offsets the current position
 
 Because of this design, `buy(0.5)` means “use roughly half of the broker cash for this symbol”, not “buy half a share”.
 
@@ -174,20 +174,20 @@ class MacdTrendStrategy(Strategy):
 
 ### Broker and orders
 
-Each call to [`Strategy.add_data()`](src/quantex/strategy.py:98) also creates a [`Broker`](src/quantex/broker.py:113) for that symbol.
+Each call to [`Strategy.add_data()`](src/quantex/strategy.py:98) also creates a [`Broker`](src/quantex/broker/broker.py:113) for that symbol.
 
 Supported order behavior in the current codebase:
 
-- market orders and limit orders via [`OrderType`](src/quantex/broker.py:24)
-- pending, active, and complete order states via [`OrderStatus`](src/quantex/broker.py:37)
-- optional stop-loss and take-profit triggers stored on [`Order`](src/quantex/broker.py:52)
-- percentage or cash commissions via [`CommissionType`](src/quantex/enums.py:4)
+- market orders and limit orders via [`OrderType`](src/quantex/broker/types.py:4)
+- pending, active, and complete order states via [`OrderStatus`](src/quantex/broker/types.py:16)
+- optional stop-loss and take-profit triggers stored on [`Order`](src/quantex/broker/broker.py:52)
+- percentage or cash commissions via [`CommissionType`](src/quantex/broker/types.py:28)
 
 ## Optimization
 
-[`SimpleBacktester.optimize()`](src/quantex/backtester.py:485) runs a grid search over every parameter combination you provide.
+[`SimpleBacktester.optimize()`](src/quantex/backtester/backtester.py:485) runs a grid search over every parameter combination you provide.
 
-[`SimpleBacktester.optimize_parallel()`](src/quantex/backtester.py:659) does the same work in multiple processes, then re-runs the best parameter set locally to produce a full [`BacktestReport`](src/quantex/backtester.py:188).
+[`SimpleBacktester.optimize_parallel()`](src/quantex/backtester/backtester.py:659) does the same work in multiple processes, then re-runs the best parameter set locally to produce a full [`BacktestReport`](src/quantex/backtester/reports.py:4).
 
 Minimal example:
 
@@ -205,6 +205,64 @@ best_params, best_report, results = backtester.optimize(
 print(best_params)
 print(best_report)
 print(results.head())
+```
+
+### Train/Validate/Test Optimization
+
+[`SimpleBacktester.optimize_with_split()`](src/quantex/backtester/backtester.py:564) performs grid search with ML-style train/validate/test data splits to help detect overfitting.
+
+```python
+result = backtester.optimize_with_split(
+    {"fast_period": [5, 10, 15], "slow_period": [20, 30, 50]},
+    train_ratio=0.6,
+    validate_ratio=0.2,
+    test_ratio=0.2,
+    selection_criterion="validate",  # Select best params based on validate performance
+)
+
+print(f"Best params: {result.best_params}")
+print(f"Train Sharpe: {result.train_metrics['sharpe']}")
+print(f"Validate Sharpe: {result.validate_metrics['sharpe']}")
+print(f"Test Sharpe: {result.test_metrics['sharpe']}")
+```
+
+### Gradient Descent Optimization
+
+[`SimpleBacktester.optimize_gradient_descent()`](src/quantex/backtester/backtester.py:852) uses gradient descent for continuous parameter optimization, supporting momentum, learning rate schedules, and integer parameter handling.
+
+```python
+result = backtester.optimize_gradient_descent(
+    param_init={"fast_period": 10.0, "slow_period": 30.0},
+    param_bounds={
+        "fast_period": (2.0, 50.0),
+        "slow_period": (10.0, 100.0)
+    },
+    learning_rate=0.01,
+    iterations=100,
+    momentum=0.9,
+    integer_params={"fast_period", "slow_period"},
+)
+
+print(f"Optimized params: {result.best_params}")
+print(result.train_report)
+```
+
+### Monte Carlo Simulation
+
+[`SimpleBacktester.monte_carlo()`](src/quantex/backtester/backtester.py:1183) runs Monte Carlo simulations to test strategy robustness through two modes:
+
+- **Trade Order Randomization** ([`MonteCarloMode.TRADE_ORDER`](src/quantex/backtester/montecarlo.py:25)): Shuffles the sequence of trade execution while keeping the same trades
+- **Price Path Resampling** ([`MonteCarloMode.PRICE_PATH`](src/quantex/backtester/montecarlo.py:27)): Creates synthetic market scenarios from historical returns
+
+```python
+result = backtester.monte_carlo(
+    simulations=500,
+    mode="both",  # Run both trade order and price path simulations
+    seed=42,
+)
+
+print(result)  # Print summary statistics (percentiles, confidence intervals)
+result.plot()  # Show spaghetti plot of equity curves
 ```
 
 ## Documentation
