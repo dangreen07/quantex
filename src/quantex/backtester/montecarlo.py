@@ -231,10 +231,10 @@ def _run_trade_order_simulation(
     """
     if seed is not None:
         random.seed(seed)
-    
-    # Shuffle the orders
-    shuffled_orders = original_orders.copy()
-    random.shuffle(shuffled_orders)
+
+    # Trade-order Monte Carlo must preserve the trade outcomes while changing
+    # only the order in which those outcomes are realized. We therefore shuffle
+    # the per-step equity increments, not the absolute equity values.
     
     # Get time index from original equity
     index = original_equity.index
@@ -242,22 +242,21 @@ def _run_trade_order_simulation(
     # Initialize equity record
     equity = np.full(len(index), original_cash, dtype=np.float64)
     
-    # Calculate cumulative PnL changes from original equity
-    # Convert to numpy array first to avoid type issues
+    # Use step-wise equity deltas rather than absolute values.
+    # This preserves the total PnL contribution while changing the sequence.
     equity_values = np.asarray(original_equity.values, dtype=np.float64)
-    equity_changes = np.diff(equity_values)
-    equity_changes = np.insert(equity_changes, 0, 0)
-    
-    # Shuffle the equity changes to randomize trade order
-    # Convert to list for shuffle, then back to array
-    equity_changes_list = equity_changes.tolist()
-    random.shuffle(equity_changes_list)
-    equity_changes = np.array(equity_changes_list, dtype=np.float64)
+    equity_changes = np.diff(equity_values, prepend=original_cash)
+
+    # Keep the starting cash anchored at index 0 and randomize the remaining
+    # increments so the path always begins from the actual initial capital.
+    shuffled_changes = equity_changes[1:].tolist()
+    random.shuffle(shuffled_changes)
+    equity_changes = np.concatenate(([0.0], np.asarray(shuffled_changes, dtype=np.float64)))
     
     # Reconstruct equity curve with shuffled changes
     for i in range(1, len(equity)):
         equity[i] = equity[i - 1] + equity_changes[i]
-    
+
     return pd.Series(equity, index=index)
 
 
@@ -359,7 +358,7 @@ def _run_price_path_simulation(
             synthetic_high = np.maximum(synthetic_open, synthetic_close)
             synthetic_low = np.minimum(synthetic_open, synthetic_close)
 
-        synthetic_df = source_df
+        synthetic_df = source_df.copy()
         synthetic_df["Close"] = synthetic_close
         synthetic_df["Open"] = synthetic_open
         synthetic_df["High"] = np.maximum.reduce([synthetic_high, synthetic_open, synthetic_close])
@@ -492,14 +491,55 @@ def monte_carlo(
             )
             equity_curves.append(curve)
     
-    # Create result object
-    result = MonteCarloResult(
-        mode=mode,
-        equity_curves=equity_curves,
-        original_equity=original_equity,
-        simulations=simulations,
-        starting_cash=original_cash,
-    )
-    result._compute_statistics()
-    
+    # In BOTH mode we ran two distinct simulation families per iteration.
+    # Keep the results and summary statistics separate to avoid pooling
+    # different distributions into a single invalid summary.
+    if mode == MonteCarloMode.BOTH:
+        trade_curves = equity_curves[0::2]
+        price_curves = equity_curves[1::2]
+
+        trade_result = MonteCarloResult(
+            mode=MonteCarloMode.TRADE_ORDER,
+            equity_curves=trade_curves,
+            original_equity=original_equity,
+            simulations=simulations,
+            starting_cash=original_cash,
+        )
+        trade_result._compute_statistics()
+
+        price_result = MonteCarloResult(
+            mode=MonteCarloMode.PRICE_PATH,
+            equity_curves=price_curves,
+            original_equity=original_equity,
+            simulations=simulations,
+            starting_cash=original_cash,
+        )
+        price_result._compute_statistics()
+
+        result = MonteCarloResult(
+            mode=mode,
+            equity_curves=equity_curves,
+            original_equity=original_equity,
+            simulations=simulations,
+            starting_cash=original_cash,
+        )
+        result.summary_stats = {
+            "trade_order": trade_result.summary_stats,
+            "price_path": price_result.summary_stats,
+        }
+        result.percentile_results = {
+            "trade_order": trade_result.percentile_results,
+            "price_path": price_result.percentile_results,
+        }
+    else:
+        # Create result object
+        result = MonteCarloResult(
+            mode=mode,
+            equity_curves=equity_curves,
+            original_equity=original_equity,
+            simulations=simulations,
+            starting_cash=original_cash,
+        )
+        result._compute_statistics()
+
     return result
