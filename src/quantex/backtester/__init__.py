@@ -15,6 +15,9 @@ from .backtester import SimpleBacktester
 # Keep parallel exports for advanced users
 from .parallel import _worker_init, _worker_eval
 
+# Monte Carlo simulation
+from .montecarlo import MonteCarloResult, MonteCarloMode
+
 __all__ = [
     # Constants
     "DataSplitMode",
@@ -36,4 +39,7 @@ __all__ = [
     # Parallel (advanced)
     "_worker_init",
     "_worker_eval",
+    # Monte Carlo
+    "MonteCarloResult",
+    "MonteCarloMode",
 ]

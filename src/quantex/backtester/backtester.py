@@ -21,6 +21,8 @@ from .parallel import _worker_eval, _worker_init
 from .reports import BacktestReport, OptimizationResult
 
 
+from .montecarlo import monte_carlo, MonteCarloResult, MonteCarloMode
+
 class SimpleBacktester:
     """
     Simple backtester for executing trading strategies on historical data.
@@ -1147,4 +1149,61 @@ class SimpleBacktester:
             validate_metrics=validate_metrics,
             test_metrics=test_metrics,
             all_results=history_df
+        )
+
+    def monte_carlo(
+        self,
+        simulations: int = 100,
+        mode: MonteCarloMode | str = MonteCarloMode.BOTH,
+        seed: int | None = None,
+        progress_bar: bool = False,
+    ) -> MonteCarloResult:
+        """
+        Run Monte Carlo simulation on the strategy.
+        
+        This method runs multiple simulations to test strategy robustness using
+        either trade order randomization, price path resampling, or both.
+        
+        Args:
+            simulations (int, optional): Number of simulations to run. Defaults to 100.
+            mode (MonteCarloMode | str, optional): Simulation mode. Options:
+                - "trade_order": Randomize trade execution order
+                - "price_path": Resample price returns to create synthetic paths
+                - "both": Run both analyses and combine results
+                Defaults to "both".
+            seed (int | None, optional): Random seed for reproducibility.
+                Defaults to None.
+            progress_bar (bool, optional): Whether to show progress bar during simulation.
+                Defaults to False.
+        
+        Returns:
+            MonteCarloResult: Object containing:
+                - equity_curves: List of equity curves from each simulation
+                - summary_stats: Mean, std, min, max of final returns
+                - percentile_results: 5th, 25th, 50th, 75th, 95th percentiles
+                - plot(): Visualization method for the "spaghetti plot"
+        
+        Example:
+            >>> from quantex import SimpleBacktester, CSVDataSource
+            >>> source = CSVDataSource("data.csv")
+            >>> # Create and configure strategy
+            >>> bt = SimpleBacktester(strategy, cash=10000)
+            >>> result = bt.monte_carlo(simulations=500, mode="both")
+            >>> print(result)  # Print summary statistics
+            >>> result.plot()  # Show spaghetti plot
+        
+        Note:
+            - Trade order randomization shuffles when trades execute while keeping the same trades
+            - Price path resampling creates synthetic market scenarios from historical returns
+            - Both methods help identify if strategy performance is robust or dependent on specific conditions
+        """
+        # Import here to avoid circular imports
+        from .montecarlo import monte_carlo as _monte_carlo
+        
+        return _monte_carlo(
+            self,
+            simulations=simulations,
+            mode=mode,
+            seed=seed,
+            progress_bar=progress_bar,
         )
