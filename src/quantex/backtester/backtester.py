@@ -175,7 +175,12 @@ class SimpleBacktester:
             final_cash=self.PnLRecord[-1],
             PnlRecord=pd.Series(self.PnLRecord, index=index),
             orders=orders,
-            tradeRecord=tradeRecord)
+            tradeRecord=tradeRecord,
+            margin_call_events=[
+                event
+                for broker in self.strategy.positions.values()
+                for event in getattr(broker, "margin_call_events", [])
+            ] or None)
     
     def optimize(
         self,

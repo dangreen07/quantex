@@ -142,3 +142,33 @@ class TestBroker:
         initial_cash = broker.cash
         broker._credit(100.0)
         assert broker.cash == initial_cash + 100.0
+
+    def test_margin_call_records_event_and_sets_flag(self, broker):
+        """Test that a margin call is visible to the user through broker state."""
+        broker.position = -10.0
+        broker.cash = 0.0
+        broker._i = 0
+        broker.source.current_index = 0
+
+        broker._iterate(0)
+
+        assert broker.margin_call_triggered is True
+        assert len(broker.margin_call_events) == 1
+        event = broker.margin_call_events[0]
+        assert event["position"] == -10.0
+        assert event["margin_call_threshold"] > event["equity"]
+
+    def test_backtest_report_includes_margin_calls(self, datasource):
+        """Test that the backtest report surfaces margin call events in its output."""
+        from quantex.backtester.reports import BacktestReport
+
+        report = BacktestReport(
+            starting_cash=np.float64(10000),
+            final_cash=np.float64(9000),
+            PnlRecord=pd.Series([10000.0, 9000.0]),
+            orders=[],
+            tradeRecord=[],
+            margin_call_events=[{"timestamp": datasource.Index[0], "equity": 9000.0, "margin_call_threshold": 9500.0, "position": -10.0}],
+        )
+
+        assert "Margin Calls: 1" in str(report)

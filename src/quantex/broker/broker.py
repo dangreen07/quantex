@@ -79,6 +79,8 @@ class Broker:
         self.complete_orders = []
         self.active_order: Order | None = None
         self.pending_close_order: Order | None = None
+        self.margin_call_triggered: bool = False
+        self.margin_call_events: list[dict] = []
         self._i = 0
         self.source = source
         self.PnLRecord = np.full(len(self.source.data['Close']), self.cash, dtype=np.float64)
@@ -604,5 +606,12 @@ class Broker:
         equity = self.cash + unrealized
         margin_call = self.margin_call * abs(self.position) * self.source.CClose
         if equity < margin_call and self.position < 0:
+            self.margin_call_triggered = True
+            self.margin_call_events.append({
+                "timestamp": self.source.Index[self._i],
+                "equity": equity,
+                "margin_call_threshold": margin_call,
+                "position": self.position,
+            })
             self.close() ## Close all positions immediately, margin call
         self.PnLRecord[self._i] = equity

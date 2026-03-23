@@ -9,3 +9,4 @@ random_walk_profile.prof
 .venv
 .tox
 .benchmarks
+testing/

@@ -1,6 +1,6 @@
 [project]
 name = "quantex"
-version = "0.4.5"
+version = "0.4.6"
 description = "A simple quant strategy creation and backtesting package."
 authors = [
     {name = "Daniel Green",email = "dangreen07@outlook.com"}
@@ -39,6 +39,7 @@ mkdocs-mermaid2-plugin = "^1.2.1"
 mkdocs-print-site-plugin = "^2.7.3"
 pytest-xdist = "^3.8.0"
 matplotlib = "^3.10.3"
+ipykernel = "^7.2.0"
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]

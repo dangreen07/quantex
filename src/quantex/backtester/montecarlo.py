@@ -13,6 +13,7 @@ import math
 import random
 import numpy as np
 import pandas as pd
+import matplotlib.dates as mdates
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
@@ -64,6 +65,7 @@ class MonteCarloResult:
     simulations: int = 0
     starting_cash: float = 0.0
     drawdown_stats: dict = field(default_factory=dict)
+    plot_max_curves: int = 150
     
     def _compute_statistics(self):
         """Compute summary statistics from equity curves."""
@@ -115,7 +117,7 @@ class MonteCarloResult:
         self,
         target_return: float,
         drawdown_threshold: float,
-        horizon: int | None = None,
+        horizon: int | str | pd.Timedelta | None = None,
         as_percent: bool = True,
     ) -> dict:
         """
@@ -127,8 +129,10 @@ class MonteCarloResult:
                 True, this is treated as a decimal return (e.g. 0.05 for 5%).
             drawdown_threshold (float): Drawdown threshold. If `as_percent` is
                 True, this is treated as a decimal drawdown (e.g. 0.05 for 5%).
-            horizon (int | None, optional): Number of steps to evaluate. Defaults
-                to the full length of the simulated curves.
+            horizon (int | str | pd.Timedelta | None, optional): Evaluation horizon.
+                If an integer is provided, it is treated as a number of steps.
+                If a string or Timedelta is provided, it is treated as a time span
+                relative to the first timestamp in each equity curve.
             as_percent (bool, optional): Whether thresholds are provided as
                 decimal percentages. Defaults to True.
 
@@ -144,8 +148,26 @@ class MonteCarloResult:
                 "drawdown_threshold": drawdown_threshold,
             }
 
-        horizon = horizon or len(self.equity_curves[0])
-        horizon = max(1, min(horizon, len(self.equity_curves[0])))
+        def _resolve_horizon(curve: pd.Series, horizon_value: int | str | pd.Timedelta | None) -> int:
+            if horizon_value is None:
+                return len(curve)
+            if isinstance(horizon_value, (int, np.integer)):
+                return max(1, min(int(horizon_value), len(curve)))
+
+            if not isinstance(curve.index, pd.DatetimeIndex):
+                return max(1, min(len(curve), len(curve)))
+
+            delta = pd.Timedelta(horizon_value)
+            if delta <= pd.Timedelta(0):
+                return 1
+
+            start_time = curve.index[0]
+            end_time = start_time + delta
+            resolved = int(curve.index.searchsorted(end_time, side="right"))
+            return max(1, min(resolved, len(curve)))
+
+        first_curve = self.equity_curves[0]
+        horizon_steps = _resolve_horizon(first_curve, horizon)
 
         if as_percent:
             target_return = float(target_return)
@@ -154,7 +176,7 @@ class MonteCarloResult:
         return_hits = 0
         drawdown_hits = 0
         for curve in self.equity_curves:
-            sampled = curve.iloc[:horizon]
+            sampled = curve.iloc[:horizon_steps]
             start_value = float(sampled.iloc[0])
             end_value = float(sampled.iloc[-1])
             achieved_return = (end_value / start_value) - 1.0 if start_value != 0 else 0.0
@@ -175,7 +197,7 @@ class MonteCarloResult:
         }
     
     def plot(self, figsize: tuple = (12, 8), show_original: bool = True, 
-             show_percentiles: bool = True) -> None:
+             show_percentiles: bool = True, max_curves: int | None = None) -> None:
         """
         Plot all Monte Carlo simulation equity curves.
         
@@ -190,6 +212,8 @@ class MonteCarloResult:
                 curve. Defaults to True.
             show_percentiles (bool, optional): Whether to show percentile bands.
                 Defaults to True.
+            max_curves (int | None, optional): Maximum number of simulation curves
+                to render. Defaults to ``self.plot_max_curves``.
         
         Note:
             This method uses matplotlib to display the plots and requires
@@ -198,11 +222,13 @@ class MonteCarloResult:
         from matplotlib import pyplot as plt
         
         fig, ax = plt.subplots(figsize=figsize)
+
+        max_curves = self.plot_max_curves if max_curves is None else max_curves
         
-        # Plot using a numeric simulation step axis to avoid date conversion
-        # artifacts when equity curves share the same time index.
+        # Plot against the datetime index so the x-axis reflects the actual
+        # backtest timeline instead of a generic simulation step axis.
         if not self.equity_curves:
-            ax.set_xlabel("Step")
+            ax.set_xlabel("Datetime")
             ax.set_ylabel("Portfolio Value")
             ax.set_title(f"Monte Carlo Simulation Results ({self.simulations} simulations)")
             ax.grid(alpha=0.3)
@@ -210,14 +236,35 @@ class MonteCarloResult:
             plt.show()
             return
 
-        step_index = np.arange(len(self.equity_curves[0]), dtype=np.float64)
+        base_index = self.equity_curves[0].index
+        if not isinstance(base_index, pd.DatetimeIndex):
+            base_index = pd.to_datetime(base_index)
+
+        def _plot_x_values(curve: pd.Series) -> pd.Index:
+            if isinstance(curve.index, pd.DatetimeIndex):
+                return curve.index
+            return pd.to_datetime(curve.index)
         
         # Plot all simulation curves with low alpha (transparency)
         # This makes the average path appear lightest due to overlap
-        for curve in self.equity_curves:
-            x_vals = np.arange(len(curve), dtype=np.float64)
+        color_cycle = plt.rcParams["axes.prop_cycle"].by_key().get("color", ["steelblue"])
+        curve_count = len(self.equity_curves)
+        if max_curves is not None and max_curves > 0 and curve_count > max_curves:
+            plot_indices = np.linspace(0, curve_count - 1, max_curves, dtype=int)
+        else:
+            plot_indices = range(curve_count)
+
+        for i in plot_indices:
+            curve = self.equity_curves[i]
+            x_vals = _plot_x_values(curve)
             y_vals = np.asarray(curve.values, dtype=np.float64)
-            ax.plot(x_vals, y_vals, color="steelblue", alpha=0.1, linewidth=0.5)
+            ax.plot(
+                x_vals,
+                y_vals,
+                color=color_cycle[i % len(color_cycle)],
+                alpha=0.08,
+                linewidth=0.5,
+            )
         
         # Compute mean and median curves for highlighting
         if self.equity_curves:
@@ -227,18 +274,20 @@ class MonteCarloResult:
             median_curve = aligned.median(axis=1)
             
             # Plot mean curve (thicker, lighter)
-            x_mean = np.arange(len(mean_curve), dtype=np.float64)
+            x_mean = base_index
             y_mean = np.asarray(mean_curve.values, dtype=np.float64)
             ax.plot(x_mean, y_mean, color="darkblue", alpha=0.8, linewidth=2, label="Mean")
             
             # Plot median curve
-            x_med = np.arange(len(median_curve), dtype=np.float64)
+            x_med = base_index
             y_med = np.asarray(median_curve.values, dtype=np.float64)
             ax.plot(x_med, y_med, color="navy", alpha=0.6, linewidth=1.5, linestyle="--", label="Median")
         
         # Show original equity curve if requested
         if show_original and self.original_equity is not None:
-            x_orig = np.arange(len(self.original_equity), dtype=np.float64)
+            x_orig = self.original_equity.index
+            if not isinstance(x_orig, pd.DatetimeIndex):
+                x_orig = pd.to_datetime(x_orig)
             y_orig = np.asarray(self.original_equity.values, dtype=np.float64)
             ax.plot(x_orig, y_orig, color="red", alpha=0.9, linewidth=2, label="Original Backtest")
         
@@ -247,19 +296,20 @@ class MonteCarloResult:
             aligned = pd.concat(self.equity_curves, axis=1)
             p5 = aligned.quantile(0.05, axis=1)
             p95 = aligned.quantile(0.95, axis=1)
-            x_p5 = np.arange(len(p5), dtype=np.float64)
+            x_p5 = p5.index
+            if not isinstance(x_p5, pd.DatetimeIndex):
+                x_p5 = pd.to_datetime(x_p5)
             y_p5 = np.asarray(p5.values, dtype=np.float64)
             y_p95 = np.asarray(p95.values, dtype=np.float64)
             ax.fill_between(x_p5, y_p5, y_p95, alpha=0.2, color="steelblue", label="5th-95th Percentile")
         
-        ax.set_xlabel("Step")
+        ax.set_xlabel("Datetime")
         ax.set_ylabel("Portfolio Value")
         ax.set_title(f"Monte Carlo Simulation Results ({self.simulations} simulations)")
         ax.legend(loc="best")
         ax.grid(alpha=0.3)
-
-        # Match the more compact spaghetti-plot look by tightening x-limits.
-        ax.set_xlim(step_index[0], step_index[-1])
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m"))
+        fig.autofmt_xdate()
         
         plt.tight_layout()
         plt.show()
@@ -372,9 +422,10 @@ def _run_trade_shuffle_with_replacement_simulation(
     """
     Run a Monte Carlo simulation that samples trade outcomes with replacement.
 
-    This mode allows some trades to be repeated while others may be omitted.
-    The sampled trade outcomes are then applied as percentage returns to the
-    portfolio curve.
+    This mode reuses the original trade-return sequence as a return pool and
+    reconstructs the curve using a replacement-sampled path. Any remaining
+    steps are kept neutral so the resulting equity curve always spans the same
+    time axis as the original backtest.
     """
     if seed is not None:
         random.seed(seed)
@@ -394,13 +445,7 @@ def _run_trade_shuffle_with_replacement_simulation(
     if not trade_returns:
         return pd.Series(equity, index=index)
 
-    # Build a replacement-sampled sequence that may include repeated trade
-    # outcomes and omit others entirely by only sampling a subset of the trade
-    # return pool on each simulation, then pad the rest with neutral returns so
-    # the full curve length is preserved.
-    sample_size = max(1, int(len(trade_returns) * 0.75))
-    sampled_returns = [random.choice(trade_returns) for _ in range(sample_size)]
-    sampled_returns.extend([0.0] * (len(trade_returns) - sample_size))
+    sampled_returns = [random.choice(trade_returns) for _ in range(len(trade_returns))]
 
     equity_returns = np.concatenate(([0.0], np.asarray(sampled_returns, dtype=np.float64)))
 
@@ -563,7 +608,7 @@ def monte_carlo(
             - "trade_order": Randomize trade execution order
             - "price_path": Resample price returns to create synthetic paths
             - "both": Run both analyses and combine results
-            Defaults to "both".
+            Defaults to "trade_order".
         seed (int | None, optional): Random seed for reproducibility.
             Defaults to None.
         progress_bar (bool, optional): Whether to show progress bar during simulation.

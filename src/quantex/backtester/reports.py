@@ -46,16 +46,18 @@ class BacktestReport:
     metrics such as Sharpe ratio and maximum drawdown.
     
     Attributes:
-        starting_cash (np.float64): Initial cash amount at start of backtest.
-        final_cash (np.float64): Final cash amount at end of backtest.
-        PnlRecord (pd.Series): Time series of P&L values throughout the backtest.
-        orders (list[Order]): List of all orders executed during the backtest.
+    starting_cash (np.float64): Initial cash amount at start of backtest.
+    final_cash (np.float64): Final cash amount at end of backtest.
+    PnlRecord (pd.Series): Time series of P&L values throughout the backtest.
+    orders (list[Order]): List of all orders executed during the backtest.
+    margin_call_events (list[dict]): Margin call events triggered during the run.
     """
     starting_cash: np.float64
     final_cash: np.float64
     PnlRecord: pd.Series
     orders: list
     tradeRecord: list[np.float64]
+    margin_call_events: list[dict] | None = None
 
     @property
     def annual_rf(self):
@@ -201,6 +203,7 @@ class BacktestReport:
         tot_return = float(equity.iloc[-1] / equity.iloc[0] - 1.0)
         annualized_return = float((1.0 + tot_return) ** (self.periods_per_year / max(len(returns), 1)) - 1.0)
         tot_orders = len(self.orders)
+        margin_calls = len(self.margin_call_events or [])
 
         return (
             f"Starting Cash: ${self.starting_cash:,.2f}\n"
@@ -215,5 +218,6 @@ class BacktestReport:
         ) + (
             f"\nMax Drawdown: {mdd:.2%}\n"
             f"Kelly Fraction: {self.kelly_criterion:.3}\n"
-            f"Total Trades: {tot_orders:,}"
+            f"Total Trades: {tot_orders:,}\n"
+            f"Margin Calls: {margin_calls:,}"
         )

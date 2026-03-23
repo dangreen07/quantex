@@ -272,6 +272,61 @@ class TestMonteCarlo:
         # Each equity curve should match original length
         for curve in result.equity_curves:
             assert len(curve) == original_len
+
+    def test_monte_carlo_plot_uses_datetime_index(self, backtester, monkeypatch):
+        """Monte Carlo plot should use datetime x-axis values."""
+        result = backtester.monte_carlo(
+            simulations=3,
+            mode="trade_order",
+            seed=42,
+            progress_bar=False,
+        )
+
+        captured = {}
+
+        class DummyAxis:
+            def __init__(self):
+                self.xaxis = self
+
+            def plot(self, x, y, *args, **kwargs):
+                captured.setdefault("x_values", []).append(x)
+
+            def fill_between(self, x, y1, y2, *args, **kwargs):
+                captured["fill_x"] = x
+
+            def set_xlabel(self, *args, **kwargs):
+                pass
+
+            def set_ylabel(self, *args, **kwargs):
+                pass
+
+            def set_title(self, *args, **kwargs):
+                pass
+
+            def legend(self, *args, **kwargs):
+                pass
+
+            def grid(self, *args, **kwargs):
+                pass
+
+            def set_major_formatter(self, *args, **kwargs):
+                pass
+
+        class DummyFigure:
+            def autofmt_xdate(self):
+                captured["autofmt_xdate"] = True
+
+        monkeypatch.setattr("matplotlib.pyplot.subplots", lambda *args, **kwargs: (DummyFigure(), DummyAxis()))
+        monkeypatch.setattr("matplotlib.pyplot.tight_layout", lambda *args, **kwargs: None)
+        monkeypatch.setattr("matplotlib.pyplot.show", lambda *args, **kwargs: None)
+
+        result.plot()
+
+        assert "x_values" in captured
+        assert all(isinstance(x, pd.DatetimeIndex) for x in captured["x_values"])
+        assert "fill_x" in captured
+        assert isinstance(captured["fill_x"], pd.DatetimeIndex)
+        assert captured.get("autofmt_xdate") is True
     
     def test_monte_carlo_no_trades(self, ohlcv_data):
         """Strategy with no trades should handle gracefully."""
