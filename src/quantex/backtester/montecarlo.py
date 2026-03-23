@@ -112,10 +112,23 @@ class MonteCarloResult:
         
         fig, ax = plt.subplots(figsize=figsize)
         
+        # Plot using a numeric simulation step axis to avoid date conversion
+        # artifacts when equity curves share the same time index.
+        if not self.equity_curves:
+            ax.set_xlabel("Step")
+            ax.set_ylabel("Portfolio Value")
+            ax.set_title(f"Monte Carlo Simulation Results ({self.simulations} simulations)")
+            ax.grid(alpha=0.3)
+            plt.tight_layout()
+            plt.show()
+            return
+
+        step_index = np.arange(len(self.equity_curves[0]), dtype=np.float64)
+        
         # Plot all simulation curves with low alpha (transparency)
         # This makes the average path appear lightest due to overlap
         for curve in self.equity_curves:
-            x_vals = np.asarray(curve.index, dtype=np.float64)
+            x_vals = np.arange(len(curve), dtype=np.float64)
             y_vals = np.asarray(curve.values, dtype=np.float64)
             ax.plot(x_vals, y_vals, color="steelblue", alpha=0.1, linewidth=0.5)
         
@@ -127,18 +140,18 @@ class MonteCarloResult:
             median_curve = aligned.median(axis=1)
             
             # Plot mean curve (thicker, lighter)
-            x_mean = np.asarray(mean_curve.index, dtype=np.float64)
+            x_mean = np.arange(len(mean_curve), dtype=np.float64)
             y_mean = np.asarray(mean_curve.values, dtype=np.float64)
             ax.plot(x_mean, y_mean, color="darkblue", alpha=0.8, linewidth=2, label="Mean")
             
             # Plot median curve
-            x_med = np.asarray(median_curve.index, dtype=np.float64)
+            x_med = np.arange(len(median_curve), dtype=np.float64)
             y_med = np.asarray(median_curve.values, dtype=np.float64)
             ax.plot(x_med, y_med, color="navy", alpha=0.6, linewidth=1.5, linestyle="--", label="Median")
         
         # Show original equity curve if requested
         if show_original and self.original_equity is not None:
-            x_orig = np.asarray(self.original_equity.index, dtype=np.float64)
+            x_orig = np.arange(len(self.original_equity), dtype=np.float64)
             y_orig = np.asarray(self.original_equity.values, dtype=np.float64)
             ax.plot(x_orig, y_orig, color="red", alpha=0.9, linewidth=2, label="Original Backtest")
         
@@ -147,16 +160,19 @@ class MonteCarloResult:
             aligned = pd.concat(self.equity_curves, axis=1)
             p5 = aligned.quantile(0.05, axis=1)
             p95 = aligned.quantile(0.95, axis=1)
-            x_p5 = np.asarray(p5.index, dtype=np.float64)
+            x_p5 = np.arange(len(p5), dtype=np.float64)
             y_p5 = np.asarray(p5.values, dtype=np.float64)
             y_p95 = np.asarray(p95.values, dtype=np.float64)
             ax.fill_between(x_p5, y_p5, y_p95, alpha=0.2, color="steelblue", label="5th-95th Percentile")
         
-        ax.set_xlabel("Date")
+        ax.set_xlabel("Step")
         ax.set_ylabel("Portfolio Value")
         ax.set_title(f"Monte Carlo Simulation Results ({self.simulations} simulations)")
         ax.legend(loc="best")
         ax.grid(alpha=0.3)
+
+        # Match the more compact spaghetti-plot look by tightening x-limits.
+        ax.set_xlim(step_index[0], step_index[-1])
         
         plt.tight_layout()
         plt.show()
