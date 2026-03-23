@@ -1,9 +1,9 @@
 import pytest
 import pandas as pd
 import numpy as np
+from quantex.backtester.constants import CommissionType
 from quantex.datasource import DataSource
 from quantex.broker import Broker, Order, OrderSide, OrderType, OrderStatus
-from quantex.enums import CommissionType
 
 
 class TestBroker:

@@ -1,5 +1,6 @@
 # Re-export all public API from submodules for backward compatibility
-from .constants import DataSplitMode, CommissionType
+from .constants import DataSplitMode
+from ..broker.types import CommissionType
 from .data_splits import TrainValidateTestSplit, create_train_validate_test_split
 from .metrics import (
     max_drawdown,

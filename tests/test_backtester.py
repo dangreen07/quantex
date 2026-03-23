@@ -10,9 +10,8 @@ from quantex.backtester import (
     create_train_validate_test_split,
     OptimizationResult,
     TrainValidateTestSplit,
-    DataSplitMode,
+    CommissionType
 )
-from quantex.enums import CommissionType
 from tests.strategies.common import (
     DeterministicEntryExitStrategy,
     IndicatorResetStrategy,
@@ -98,43 +97,44 @@ class TestBacktester:
         params = {"dummy_param": [1, 2]}
         backtester.strategy.dummy_param = 1
 
-        best_params, best_report, results_df = backtester.optimize(params)
+        result = backtester.optimize(params)
 
-        assert isinstance(best_params, dict)
-        assert isinstance(best_report, BacktestReport)
-        assert isinstance(results_df, pd.DataFrame)
-        assert len(results_df) == 2  # Two parameter combinations
+        assert isinstance(result, OptimizationResult)
+        assert isinstance(result.best_params, dict)
+        assert isinstance(result.train_report, BacktestReport)
+        assert isinstance(result.all_results, pd.DataFrame)
+        assert len(result.all_results) == 2  # Two parameter combinations
 
     def test_optimize_supports_custom_objective(self, datasource):
         strategy = RiskAwareStrategy()
         strategy.add_data(datasource, "EURUSD")
         backtester = SimpleBacktester(strategy)
 
-        best_params, best_report, results_df = backtester.optimize(
+        result = backtester.optimize(
             {"fast": range(2, 4), "slow": range(5, 7)},
             constraint=lambda p: p["fast"] < p["slow"],
             objective="total_return",
         )
 
-        assert isinstance(best_report, BacktestReport)
-        assert not results_df.empty
-        assert "objective_score" in results_df.columns
-        assert best_report.total_return == pytest.approx(results_df.iloc[0]["objective_score"])
+        assert isinstance(result.train_report, BacktestReport)
+        assert not result.all_results.empty
+        assert "objective_score" in result.all_results.columns
+        assert result.train_report.total_return == pytest.approx(result.all_results.iloc[0]["objective_score"])
 
     def test_optimize_filters_by_risk_tolerance(self, datasource):
         strategy = RiskAwareStrategy()
         strategy.add_data(datasource, "EURUSD")
         backtester = SimpleBacktester(strategy)
 
-        _, _, unrestricted = backtester.optimize(
+        unrestricted = backtester.optimize(
             {"fast": range(2, 4), "slow": range(5, 7)},
             constraint=lambda p: p["fast"] < p["slow"],
-        )
-        _, _, restricted = backtester.optimize(
+        ).all_results
+        restricted = backtester.optimize(
             {"fast": range(2, 4), "slow": range(5, 7)},
             constraint=lambda p: p["fast"] < p["slow"],
             risk_tolerance={"max_drawdown": 0.0},
-        )
+        ).all_results
 
         assert len(restricted) <= len(unrestricted)
         if not restricted.empty:
@@ -146,22 +146,22 @@ class TestBacktester:
         strategy.add_data(datasource, "EURUSD")
         backtester = SimpleBacktester(strategy)
 
-        best_params, best_report, results_df = backtester.optimize(
+        result = backtester.optimize(
             {"hold_period": range(1, 11)}
         )
 
-        assert isinstance(best_report, BacktestReport)
-        assert not results_df.empty
+        assert isinstance(result.train_report, BacktestReport)
+        assert not result.all_results.empty
 
-        matching_rows = results_df.loc[
-            results_df["hold_period"] == best_params["hold_period"]
+        matching_rows = result.all_results.loc[
+            result.all_results["hold_period"] == result.best_params["hold_period"]
         ]
         assert len(matching_rows) == 1
 
         best_row = matching_rows.iloc[0]
 
-        assert best_report.final_cash == pytest.approx(best_row["final_cash"])
-        assert best_report.total_return == pytest.approx(best_row["total_return"])
+        assert result.train_report.final_cash == pytest.approx(best_row["final_cash"])
+        assert result.train_report.total_return == pytest.approx(best_row["total_return"])
 
     def test_optimize_does_not_mutate_base_strategy_indicators(self, datasource):
         """Optimize should not leave behind indicator objects on the base strategy."""
@@ -185,13 +185,13 @@ class TestBacktester:
         backtester = SimpleBacktester(strategy)
 
         backtester.run(progress_bar=False)
-        best_params, best_report, results_df = backtester.optimize(
+        result = backtester.optimize(
             {"slow": range(4, 7), "fast": range(2, 4)},
             constraint=lambda x: x["slow"] > x["fast"],
         )
 
-        assert best_report is None
-        assert results_df.empty
+        assert result.train_report is None
+        assert result.all_results.empty
 
     def test_repeat_run_on_same_backtester_is_deterministic(self, datasource):
         """Repeated runs should not accumulate hidden state or drift."""

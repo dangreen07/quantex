@@ -1,4 +1,4 @@
-from .types import Order, OrderSide, OrderStatus, OrderType
+from .types import Order, OrderSide, OrderStatus, OrderType, CommissionType
 from .broker import Broker
 
 __all__ = [
@@ -6,5 +6,6 @@ __all__ = [
     "OrderSide",
     "OrderStatus",
     "OrderType",
+    "CommissionType",
     "Broker"
 ]

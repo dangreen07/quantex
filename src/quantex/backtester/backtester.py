@@ -10,7 +10,8 @@ from tqdm import tqdm
 from ..broker import Order
 from ..strategy import Strategy
 
-from .constants import CommissionType, DataSplitMode
+from .constants import DataSplitMode
+from ..broker.types import CommissionType
 from .data_splits import create_train_validate_test_split
 from .metrics import (
     _compute_backtest_metrics,
@@ -180,7 +181,7 @@ class SimpleBacktester:
         constraint: Callable[[dict[str, Any]], bool] | None = None,
         objective: str = "sharpe",
         risk_tolerance: dict[str, float] | None = None,
-    ):
+    ) -> OptimizationResult:
         """
         Perform a grid search over the provided parameter ranges.
         
@@ -214,13 +215,15 @@ class SimpleBacktester:
                 Defaults to None.
                 
         Returns:
-            tuple: A tuple containing (best_params, best_report, results):
-                - best_params (dict[str, Any]): Dictionary of parameter values
-                  that produced the best performance.
-                - best_report (BacktestReport): Complete backtest report for the
-                  best parameter combination.
-                - results (pd.DataFrame): DataFrame with metrics for all valid
-                  parameter combinations, sorted by performance.
+            OptimizationResult: Object containing:
+                - best_params: Best parameter values found
+                - train_report: BacktestReport for the best parameters
+                - validate_report: None for single-split optimization
+                - test_report: None for single-split optimization
+                - train_metrics: Metrics computed for best parameters
+                - validate_metrics: Empty dict for single-split optimization
+                - test_metrics: Empty dict for single-split optimization
+                - all_results: DataFrame with all parameter combinations
                    
         Raises:
             ValueError: If params is empty or contains parameters with no values.
@@ -331,7 +334,21 @@ class SimpleBacktester:
         if not results_df.empty:
             results_df.sort_values(by=["objective_score"], ascending=False, inplace=True, kind="mergesort")
 
-        return best_params or {}, best_report, results_df
+        # Compute metrics for best report if available
+        best_metrics = {}
+        if best_report is not None:
+            best_metrics = _compute_backtest_metrics(best_report)
+
+        return OptimizationResult(
+            best_params=best_params or {},
+            train_report=best_report,
+            validate_report=None,
+            test_report=None,
+            train_metrics=best_metrics,
+            validate_metrics={},
+            test_metrics={},
+            all_results=results_df
+        )
     
     def optimize_parallel(
              self,
@@ -340,7 +357,7 @@ class SimpleBacktester:
              objective: str = "sharpe",
              risk_tolerance: dict[str, float] | None = None,
              workers: int | None = None,
-             chunksize: int = 1):
+             chunksize: int = 1) -> OptimizationResult:
         """
         Perform parallel grid search over parameter ranges for optimization.
         
@@ -368,8 +385,15 @@ class SimpleBacktester:
                 Defaults to 1.
                 
         Returns:
-            tuple: Same return format as optimize():
-                (best_params, best_report, results_df)
+            OptimizationResult: Object containing:
+                - best_params: Best parameter values found
+                - train_report: BacktestReport for the best parameters
+                - validate_report: None for single-split optimization
+                - test_report: None for single-split optimization
+                - train_metrics: Metrics computed for best parameters
+                - validate_metrics: Empty dict for single-split optimization
+                - test_metrics: Empty dict for single-split optimization
+                - all_results: DataFrame with all parameter combinations
                 
         Raises:
             ValueError: If params is empty or contains parameters with no values.
@@ -492,7 +516,16 @@ class SimpleBacktester:
 
         # Determine best params from results_df if any
         if results_df.empty:
-            return {}, None, results_df
+            return OptimizationResult(
+                best_params={},
+                train_report=None,
+                validate_report=None,
+                test_report=None,
+                train_metrics={},
+                validate_metrics={},
+                test_metrics={},
+                all_results=results_df
+            )
 
         best_row = results_df.iloc[0]
         best_params = best_row["params"]
@@ -511,7 +544,19 @@ class SimpleBacktester:
         )
         best_report = bt.run(progress_bar=False)
 
-        return best_params, best_report, results_df
+        # Compute metrics for best report
+        best_metrics = _compute_backtest_metrics(best_report)
+
+        return OptimizationResult(
+            best_params=best_params,
+            train_report=best_report,
+            validate_report=None,
+            test_report=None,
+            train_metrics=best_metrics,
+            validate_metrics={},
+            test_metrics={},
+            all_results=results_df
+        )
 
     def optimize_with_split(
         self,

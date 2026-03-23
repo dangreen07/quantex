@@ -1,9 +1,8 @@
 from typing import final
 import numpy as np
 
-from quantex.broker.types import Order, OrderSide, OrderStatus, OrderType
+from quantex.broker.types import Order, OrderSide, OrderStatus, OrderType, CommissionType
 from ..datasource import DataSource
-from ..backtester import CommissionType
 
 
 def same_sign(num1, num2):
