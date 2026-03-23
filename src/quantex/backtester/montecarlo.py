@@ -8,6 +8,7 @@ robustness through two approaches:
 """
 
 import copy
+import math
 import random
 import numpy as np
 import pandas as pd
@@ -60,6 +61,7 @@ class MonteCarloResult:
     original_equity: pd.Series | None = None
     simulations: int = 0
     starting_cash: float = 0.0
+    drawdown_stats: dict = field(default_factory=dict)
     
     def _compute_statistics(self):
         """Compute summary statistics from equity curves."""
@@ -85,6 +87,89 @@ class MonteCarloResult:
             "p50": np.percentile(final_values, 50),
             "p75": np.percentile(final_values, 75),
             "p95": np.percentile(final_values, 95),
+        }
+
+        drawdowns = []
+        for curve in self.equity_curves:
+            running_max = curve.cummax()
+            dd = (curve / running_max) - 1.0
+            drawdowns.append(float(dd.min()))
+
+        drawdown_values = np.asarray(drawdowns, dtype=np.float64)
+        self.drawdown_stats = {
+            "mean": float(np.mean(drawdown_values)),
+            "std": float(np.std(drawdown_values)),
+            "min": float(np.min(drawdown_values)),
+            "max": float(np.max(drawdown_values)),
+            "median": float(np.median(drawdown_values)),
+            "p5": float(np.percentile(drawdown_values, 5)),
+            "p25": float(np.percentile(drawdown_values, 25)),
+            "p50": float(np.percentile(drawdown_values, 50)),
+            "p75": float(np.percentile(drawdown_values, 75)),
+            "p95": float(np.percentile(drawdown_values, 95)),
+        }
+
+    def probabilities(
+        self,
+        target_return: float,
+        drawdown_threshold: float,
+        horizon: int | None = None,
+        as_percent: bool = True,
+    ) -> dict:
+        """
+        Calculate the probability of reaching a target return and exceeding
+        a drawdown threshold within a given time horizon.
+
+        Args:
+            target_return (float): Target return threshold. If `as_percent` is
+                True, this is treated as a decimal return (e.g. 0.05 for 5%).
+            drawdown_threshold (float): Drawdown threshold. If `as_percent` is
+                True, this is treated as a decimal drawdown (e.g. 0.05 for 5%).
+            horizon (int | None, optional): Number of steps to evaluate. Defaults
+                to the full length of the simulated curves.
+            as_percent (bool, optional): Whether thresholds are provided as
+                decimal percentages. Defaults to True.
+
+        Returns:
+            dict: Probability summary containing return and drawdown metrics.
+        """
+        if not self.equity_curves:
+            return {
+                "return_probability": 0.0,
+                "drawdown_probability": 0.0,
+                "horizon": horizon,
+                "target_return": target_return,
+                "drawdown_threshold": drawdown_threshold,
+            }
+
+        horizon = horizon or len(self.equity_curves[0])
+        horizon = max(1, min(horizon, len(self.equity_curves[0])))
+
+        if as_percent:
+            target_return = float(target_return)
+            drawdown_threshold = float(drawdown_threshold)
+
+        return_hits = 0
+        drawdown_hits = 0
+        for curve in self.equity_curves:
+            sampled = curve.iloc[:horizon]
+            start_value = float(sampled.iloc[0])
+            end_value = float(sampled.iloc[-1])
+            achieved_return = (end_value / start_value) - 1.0 if start_value != 0 else 0.0
+            max_drawdown = float(((sampled / sampled.cummax()) - 1.0).min())
+
+            if achieved_return >= target_return:
+                return_hits += 1
+            if abs(max_drawdown) >= drawdown_threshold:
+                drawdown_hits += 1
+
+        total = len(self.equity_curves)
+        return {
+            "return_probability": return_hits / total,
+            "drawdown_probability": drawdown_hits / total,
+            "horizon": horizon,
+            "target_return": target_return,
+            "drawdown_threshold": drawdown_threshold,
         }
     
     def plot(self, figsize: tuple = (12, 8), show_original: bool = True, 
@@ -198,6 +283,13 @@ class MonteCarloResult:
             f"  50th: ${self.percentile_results.get('p50', 0):,.2f} (Median)\n"
             f"  75th: ${self.percentile_results.get('p75', 0):,.2f}\n"
             f"  95th: ${self.percentile_results.get('p95', 0):,.2f}\n"
+            f"\nDrawdown Statistics (% of peak):\n"
+            f"  Mean Max DD: {self.drawdown_stats.get('mean', 0):.2%}\n"
+            f"  5th: {self.drawdown_stats.get('p5', 0):.2%}\n"
+            f"  25th: {self.drawdown_stats.get('p25', 0):.2%}\n"
+            f"  50th: {self.drawdown_stats.get('p50', 0):.2%}\n"
+            f"  75th: {self.drawdown_stats.get('p75', 0):.2%}\n"
+            f"  95th: {self.drawdown_stats.get('p95', 0):.2%}\n"
         )
 
 
@@ -234,7 +326,7 @@ def _run_trade_order_simulation(
 
     # Trade-order Monte Carlo must preserve the trade outcomes while changing
     # only the order in which those outcomes are realized. We therefore shuffle
-    # the per-step equity increments, not the absolute equity values.
+    # the per-step percentage returns, not the absolute equity values.
     
     # Get time index from original equity
     index = original_equity.index
@@ -242,20 +334,24 @@ def _run_trade_order_simulation(
     # Initialize equity record
     equity = np.full(len(index), original_cash, dtype=np.float64)
     
-    # Use step-wise equity deltas rather than absolute values.
-    # This preserves the total PnL contribution while changing the sequence.
+    # Use step-wise percentage returns rather than absolute value changes.
+    # This keeps the path dependent on the sequence of returns rather than
+    # collapsing to the same terminal value every time.
     equity_values = np.asarray(original_equity.values, dtype=np.float64)
-    equity_changes = np.diff(equity_values, prepend=original_cash)
+    equity_returns = np.zeros_like(equity_values)
+    if len(equity_values) > 1:
+        prev = np.where(np.arange(len(equity_values)) == 0, original_cash, equity_values[:-1])
+        equity_returns[1:] = np.where(prev > 0, (equity_values[1:] / prev) - 1.0, 0.0)
 
     # Keep the starting cash anchored at index 0 and randomize the remaining
-    # increments so the path always begins from the actual initial capital.
-    shuffled_changes = equity_changes[1:].tolist()
-    random.shuffle(shuffled_changes)
-    equity_changes = np.concatenate(([0.0], np.asarray(shuffled_changes, dtype=np.float64)))
+    # returns so the path always begins from the actual initial capital.
+    shuffled_returns = equity_returns[1:].tolist()
+    random.shuffle(shuffled_returns)
+    equity_returns = np.concatenate(([0.0], np.asarray(shuffled_returns, dtype=np.float64)))
     
-    # Reconstruct equity curve with shuffled changes
+    # Reconstruct equity curve with shuffled returns
     for i in range(1, len(equity)):
-        equity[i] = equity[i - 1] + equity_changes[i]
+        equity[i] = equity[i - 1] * (1.0 + equity_returns[i])
 
     return pd.Series(equity, index=index)
 
@@ -394,8 +490,8 @@ def _run_price_path_simulation(
 
 def monte_carlo(
     self,
-    simulations: int = 100,
-    mode: MonteCarloMode | str = MonteCarloMode.BOTH,
+    simulations: int | None = None,
+    mode: MonteCarloMode | str = MonteCarloMode.TRADE_ORDER,
     seed: int | None = None,
     progress_bar: bool = False,
 ) -> MonteCarloResult:
@@ -406,7 +502,9 @@ def monte_carlo(
     either trade order randomization, price path resampling, or both.
     
     Args:
-        simulations (int, optional): Number of simulations to run. Defaults to 100.
+        simulations (int | None, optional): Number of simulations to run.
+            Defaults to the number of unique permutations of executed trades
+            when mode is "trade_order", otherwise 100.
         mode (MonteCarloMode | str, optional): Simulation mode. Options:
             - "trade_order": Randomize trade execution order
             - "price_path": Resample price returns to create synthetic paths
@@ -447,6 +545,12 @@ def monte_carlo(
     original_equity = original_report.PnlRecord
     original_cash = float(original_report.starting_cash)
     original_orders = original_report.orders
+
+    if simulations is None:
+        if mode == MonteCarloMode.TRADE_ORDER:
+            simulations = math.factorial(len(original_orders)) if original_orders else 0
+        else:
+            simulations = 100
     
     equity_curves = []
     
