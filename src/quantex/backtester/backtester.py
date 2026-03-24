@@ -604,6 +604,7 @@ class SimpleBacktester:
         random_seed: int | None = None,
         workers: int | None = None,
         progress_bar: bool = True,
+        verbose: bool = False,
     ) -> OptimizationResult:
         """
         Optimize strategy parameters using Optuna (Bayesian optimization).
@@ -639,6 +640,8 @@ class SimpleBacktester:
             workers (int | None, optional): Number of parallel workers for Optuna
                 study. Defaults to None (sequential).
             progress_bar (bool, optional): Whether to show progress bar. Defaults to True.
+            verbose (bool, optional): Whether to show Optuna trial logs. Defaults to False
+                (suppresses verbose output).
             
         Returns:
             OptimizationResult: Object containing:
@@ -672,6 +675,10 @@ class SimpleBacktester:
         """
         try:
             import optuna
+            # Control optuna verbosity - logs every trial by default
+            optuna.logging.set_verbosity(
+                optuna.logging.INFO if verbose else optuna.logging.WARNING
+            )
         except ImportError:
             raise ImportError(
                 "optuna is required for optimize_optuna. "
