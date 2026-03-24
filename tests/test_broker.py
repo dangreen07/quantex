@@ -172,3 +172,123 @@ class TestBroker:
         )
 
         assert "Margin Calls: 1" in str(report)
+
+    def test_leverage_default_value(self, broker):
+        """Test that leverage defaults to 1.0 (no leverage)."""
+        assert broker.leverage == 1.0
+
+    def test_leverage_position_amplification(self, datasource):
+        """Test that leverage amplifies position size when using quantity parameter."""
+        broker = Broker(datasource)
+        broker.leverage = 2.0  # 2x leverage
+        broker._i = 0
+        broker.source.current_index = 0
+        
+        # With 2x leverage, buying quantity=0.5 should result in 2x the base shares
+        initial_cash = broker.cash  # 10000
+        current_price = datasource.Close[0]  # 102
+        
+        broker.buy(quantity=0.5)  # 50% of cash
+        
+        order = broker.orders[0]
+        
+        # Base shares: (10000 * 0.5) / 102 = 49.02
+        # After round with share_decimals=1: 49.0
+        # With 2x leverage: 49.0 * 2 = 98.0
+        expected_leveraged_shares = 98.0
+        
+        assert abs(order.quantity - expected_leveraged_shares) < 1.0
+
+    def test_leverage_margin_calculation(self, datasource):
+        """Test that leverage reduces margin used (cash required)."""
+        broker = Broker(datasource)
+        broker.leverage = 2.0  # 2x leverage
+        broker._i = 0
+        broker.source.current_index = 0
+        
+        # Buy using quantity (not amount) to test leverage effect
+        initial_cash = broker.cash
+        
+        # Buy quantity=0.5: base shares = 49.0, with 2x leverage = 98.0 shares
+        broker.buy(quantity=0.5)
+        
+        # Process the order
+        broker._iterate(0)
+        
+        # Position: 98 shares at ~$102 = ~$10,000
+        # With 2x leverage, margin = $10,000 / 2 = $5,000
+        # Commission on full position: 98 * 102 * 0.002 = ~$20
+        expected_position = 98.0
+        expected_margin = (expected_position * datasource.COpen) / 2.0
+        expected_commission = expected_position * datasource.COpen * broker.commision
+        expected_cash = initial_cash - expected_margin - expected_commission
+        
+        assert abs(broker.cash - expected_cash) < 10.0
+
+    def test_leverage_amount_bypasses_leverage(self, datasource):
+        """Test that using amount parameter bypasses leverage (exact shares bought)."""
+        broker = Broker(datasource)
+        broker.leverage = 2.0  # 2x leverage
+        broker._i = 0
+        
+        # Buy exact 100 shares
+        broker.buy(amount=np.float64(100))
+        
+        order = broker.orders[0]
+        
+        # When amount is specified, leverage is NOT applied
+        assert order.quantity == 100
+
+    def test_leverage_validation_minimum(self, broker):
+        """Test that leverage below 0.1 is rejected in backtester."""
+        # This is tested at the backtester level
+        from quantex.backtester import SimpleBacktester
+        from quantex.strategy import Strategy
+        
+        class TestStrategy(Strategy):
+            def init(self):
+                pass
+            def next(self):
+                pass
+        
+        with pytest.raises(ValueError, match="leverage must be at least 0.1"):
+            SimpleBacktester(TestStrategy(), leverage=0.05)
+
+    def test_leverage_validation_maximum(self, broker):
+        """Test that leverage above 100 is rejected in backtester."""
+        from quantex.backtester import SimpleBacktester
+        from quantex.strategy import Strategy
+        
+        class TestStrategy(Strategy):
+            def init(self):
+                pass
+            def next(self):
+                pass
+        
+        with pytest.raises(ValueError, match="leverage cannot exceed 100"):
+            SimpleBacktester(TestStrategy(), leverage=150)
+
+    def test_leverage_commission_on_full_position(self, datasource):
+        """Test that commission is calculated on full position value, not reduced by leverage."""
+        broker = Broker(datasource)
+        broker.leverage = 2.0
+        broker._i = 0
+        broker.source.current_index = 0
+        
+        initial_cash = broker.cash
+        
+        # Buy using quantity (not amount) to test leverage effect
+        broker.buy(quantity=0.5)  # Will be amplified by leverage to ~98 shares
+        
+        broker._iterate(0)
+        
+        # Commission should be on full leveraged position value
+        expected_position = 98.0  # (10000 * 0.5) / 102 * 2
+        expected_commission = expected_position * datasource.COpen * broker.commision
+        
+        # Margin used (reduced by leverage)
+        expected_margin = (expected_position * datasource.COpen) / 2.0
+        
+        expected_cash = initial_cash - expected_margin - expected_commission
+        
+        assert abs(broker.cash - expected_cash) < 1.0

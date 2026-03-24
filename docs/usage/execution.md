@@ -247,6 +247,35 @@ The broker stores a margin threshold in [`Broker.margin_call`](../../src/quantex
 
 This is a limited form of margin handling, not a full brokerage margin model.
 
+## Leverage for amplified position sizing
+
+The broker supports leverage to amplify position sizing. With leverage enabled via the [`SimpleBacktester`](../../src/quantex/backtester.py:356):
+
+- `leverage` multiplier is set on the backtester and passed to each broker
+- When buying, shares are calculated as `base_shares * leverage`
+- Margin (cash used) is calculated as `position_value / leverage`
+- This allows controlling larger positions with the same cash
+
+Example with leverage:
+
+```python
+from quantex import SimpleBacktester
+
+# 2x leverage means you control 2x the position while only using 1x cash as margin
+backtester = SimpleBacktester(
+    strategy,
+    cash=10_000,
+    leverage=2.0,
+)
+
+# In a strategy, a buy with quantity=0.5:
+# - Without leverage: controls 50% of cash worth of shares
+# - With 2x leverage: controls 100% of cash worth of shares
+# - Margin used: 100% / 2 = 50% of cash
+```
+
+Note: Leverage must be at least 0.1 (validated in the backtester constructor).
+
 ## A realistic example
 
 ```python

@@ -52,6 +52,7 @@ class Broker:
     - Commission calculations
     - Stop loss and take profit order management
     - P&L record tracking
+    - Leverage for amplified position sizing
     
     Example:
         >>> source = CSVDataSource("data.csv")  
@@ -74,6 +75,7 @@ class Broker:
         self.commision_type: CommissionType = CommissionType.PERCENTAGE
         self.lot_size: int = 1
         self.margin_call: float = 0.5 ## 50% of the cash value
+        self.leverage: float = 1.0  ## Leverage multiplier (1.0 = no leverage)
         self.share_decimals = 1
         self.orders: list[Order] = []
         self.complete_orders = []
@@ -154,7 +156,9 @@ class Broker:
               during the next iteration.
             - Market orders execute immediately at current open price.
             - Limit orders only execute when price reaches the specified level.
-              
+            - Leverage amplifies position size - with 2x leverage and quantity=1,
+              you control 2x the shares while only using 1x cash as margin.
+               
         Example:
             >>> broker = Broker(source)  
             >>> # Buy with 25% of available cash  
@@ -176,9 +180,15 @@ class Broker:
         else:
             type = OrderType.MARKET
         current_price = self.source.Close[-1]
-        total_shares = round((self.cash * quantity) / current_price, self.share_decimals)
         if (amount):
+            # When using absolute amount, still apply leverage to the base calculation
+            # but the user-provided amount is the final leveraged position size
             total_shares = amount
+        else:
+            # Calculate shares: base on cash * quantity, then apply leverage
+            base_shares = round((self.cash * quantity) / current_price, self.share_decimals)
+            # Apply leverage to increase position size
+            total_shares = round(base_shares * self.leverage, self.share_decimals)
         order = Order(
             side=OrderSide.BUY, 
             quantity=total_shares, 
@@ -489,7 +499,9 @@ class Broker:
                                         self.position_avg_price = (old_pos * self.position_avg_price + order.quantity * order.price) / new_pos
                                 else:
                                     self.position_avg_price = order.price
-                                self._debit(order.price * order.quantity)
+                                # Calculate margin (cash used) for leveraged positions
+                                margin = order.price * order.quantity / self.leverage
+                                self._debit(margin)
                                 self._apply_commission(order.quantity, order.price)
                                 self.position = new_pos
                         else:
@@ -504,7 +516,9 @@ class Broker:
                                         self.position_avg_price = (old_pos * self.position_avg_price + order.quantity * order.price) / new_pos
                                 else:
                                     self.position_avg_price = order.price
-                                self._credit(order.price * order.quantity)
+                                # Calculate margin released for leveraged positions
+                                margin = order.price * order.quantity / self.leverage
+                                self._credit(margin)
                                 self._apply_commission(order.quantity, order.price)
                                 self.position = new_pos
                         if (order.stop_loss or order.take_profit):
@@ -526,7 +540,9 @@ class Broker:
                                         self.position_avg_price = (old_pos * self.position_avg_price + order.quantity * price) / new_pos
                                 else:
                                     self.position_avg_price = price
-                                self._debit(self.source.COpen * order.quantity)
+                                # Calculate margin (cash used) for leveraged positions
+                                margin = self.source.COpen * order.quantity / self.leverage
+                                self._debit(margin)
                                 self._apply_commission(order.quantity, self.source.COpen)
                                 self.position = new_pos
                             else:
@@ -540,7 +556,9 @@ class Broker:
                                         self.position_avg_price = (old_pos * self.position_avg_price + order.quantity * price) / new_pos
                                 else:
                                     self.position_avg_price = price
-                                self._credit(self.source.COpen * order.quantity)
+                                # Calculate margin released for leveraged positions
+                                margin = self.source.COpen * order.quantity / self.leverage
+                                self._credit(margin)
                                 self._apply_commission(order.quantity, self.source.COpen)
                                 self.position = new_pos
                             if (order.stop_loss or order.take_profit):
@@ -604,13 +622,15 @@ class Broker:
                 self.pending_close_order = None
         unrealized = self.position * self.source.CClose
         equity = self.cash + unrealized
-        margin_call = self.margin_call * abs(self.position) * self.source.CClose
-        if equity < margin_call and self.position < 0:
+        # Calculate actual margin used, accounting for leverage
+        actual_margin = abs(self.position) * self.source.CClose / self.leverage
+        margin_call_threshold = self.margin_call * actual_margin
+        if equity < margin_call_threshold and self.position < 0:
             self.margin_call_triggered = True
             self.margin_call_events.append({
                 "timestamp": self.source.Index[self._i],
                 "equity": equity,
-                "margin_call_threshold": margin_call,
+                "margin_call_threshold": margin_call_threshold,
                 "position": self.position,
             })
             self.close() ## Close all positions immediately, margin call

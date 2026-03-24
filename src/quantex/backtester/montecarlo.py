@@ -462,6 +462,7 @@ def _run_price_path_simulation(
     commission: float,
     commission_type,
     lot_size: int,
+    leverage: float = 1.0,
     seed: int | None = None,
 ) -> pd.Series:
     """
@@ -477,6 +478,7 @@ def _run_price_path_simulation(
         commission (float): Commission rate.
         commission_type: Commission type enum.
         lot_size (int): Lot size for trading.
+        leverage (float): Leverage multiplier for position sizing.
         seed (int | None): Random seed for reproducibility.
     
     Returns:
@@ -581,6 +583,7 @@ def _run_price_path_simulation(
         commission=commission,
         commission_type=commission_type,
         lot_size=lot_size,
+        leverage=leverage,
     )
     report = bt.run(progress_bar=False)
     
@@ -705,6 +708,7 @@ def monte_carlo(
                 self.commission,
                 self.commission_type,
                 self.lot_size,
+                leverage=self.leverage,
                 seed=iter_seed,
             )
             equity_curves.append(curve)

@@ -21,6 +21,7 @@ Constructor signature:
 - `commission_type`: a [`CommissionType`](../../src/quantex/enums.py:4)
 - `lot_size`: used for cash commission calculations
 - `margin_call`: threshold used in broker margin logic
+- `leverage`: leverage multiplier for amplified position sizing (default: 1.0)
 
 ## Smallest working example
 
@@ -99,7 +100,30 @@ backtester = SimpleBacktester(
     commission_type=CommissionType.PERCENTAGE,
     lot_size=1,
     margin_call=0.5,
+    leverage=1.0,
 )
+```
+
+### Leverage for amplified position sizing
+
+Quantex supports leverage for amplifying position sizes. With leverage:
+
+- A `leverage` of 2.0 means you control 2x the position with the same cash
+- The broker calculates margin as `position_value / leverage`
+- Commission is still applied on the full position value
+
+Example:
+
+```python
+# 2x leverage - control twice the position with same cash
+backtester = SimpleBacktester(
+    strategy,
+    cash=10_000,
+    leverage=2.0,  # 2x leverage
+)
+
+# Result: A buy order with quantity=0.5 will control 100% of cash worth of shares
+# but only use 50% of cash as margin
 ```
 
 ### Commission types

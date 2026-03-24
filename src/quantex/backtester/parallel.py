@@ -20,7 +20,8 @@ def _worker_init(
     cash: float,
     commision: float,
     commision_type: Any,
-    lot_size: int
+    lot_size: int,
+    leverage: float,
 ) -> None:
     """
     Initializer for worker processes in parallel optimization.
@@ -35,6 +36,7 @@ def _worker_init(
         commision (float): Commission rate for trades.
         commision_type: Type of commission calculation (CommissionType enum).
         lot_size (int): Size of trading lots.
+        leverage (float): Leverage multiplier for position sizing.
         
     Note:
         This function is designed to be called by worker processes
@@ -47,6 +49,7 @@ def _worker_init(
         "commision": commision,
         "commision_type": commision_type,
         "lot_size": lot_size,
+        "leverage": leverage,
     }
 
 
@@ -176,6 +179,7 @@ def _worker_eval(param_items: tuple[tuple[str, Any], ...]) -> dict[str, Any]:
         commission=config["commision"],
         commission_type=config["commision_type"],
         lot_size=config["lot_size"],
+        leverage=config["leverage"],
     )
     report = bt.run(progress_bar=False)
 

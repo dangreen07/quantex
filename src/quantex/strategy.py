@@ -119,7 +119,9 @@ class Strategy(ABC):
             >>> class MyStrategy(Strategy):  
             ...     def init(self):  
             ...         self.add_data(CSVDataSource("AAPL.csv"), "AAPL")  
-            ...         self.add_data(CSVDataSource("EURUSD.csv"), "EURUSD")  
+            ...     def next(self):  
+            ...         if self.data['AAPL'].CClose > self.data['AAPL'].Close[-1]:  
+            ...             self.positions['AAPL'].buy(quantity=0.1)  
         """
         self.data[symbol] = source
         self.positions[symbol] = Broker(source)

@@ -66,8 +66,7 @@ class MovingAverageCross(Strategy):
             broker.close()
 
 
-strategy = MovingAverageCross()
-backtester = SimpleBacktester(strategy, cash=10_000)
+backtester = SimpleBacktester(MovingAverageCross(), cash=10_000)
 
 params = {
     "fast_period": range(5, 11),
@@ -419,8 +418,8 @@ class MovingAverageCross(Strategy):
     def next(self):
         # ... trading logic ...
 
-strategy = MovingAverageCross()
-backtester = SimpleBacktester(strategy, cash=10_000)
+
+backtester = SimpleBacktester(MovingAverageCross(), cash=10_000)
 
 # Grid search with train/validate/test splits
 result = backtester.optimize_with_split(

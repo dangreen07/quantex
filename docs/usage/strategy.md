@@ -59,7 +59,6 @@ class MovingAverageCross(Strategy):
 
     def init(self):
         self.add_data(CSVDataSource("data.csv"), "TEST")
-
         close = self.data["TEST"].Close
         self.fast_ma = self.Indicator(
             pd.Series(close).rolling(window=self.fast_period).mean().to_numpy()
@@ -83,8 +82,8 @@ class MovingAverageCross(Strategy):
             broker.close()
 
 
-strategy = MovingAverageCross()
-report = SimpleBacktester(strategy, cash=10_000).run()
+# Run with optional leverage for amplified position sizing
+report = SimpleBacktester(MovingAverageCross(), cash=10_000, leverage=1.0).run()
 print(report)
 ```
 
@@ -94,16 +93,17 @@ print(report)
 
 [`self.data`](../../src/quantex/strategy.py:48) is a dictionary whose keys are the symbol names you used with [`Strategy.add_data()`](../../src/quantex/strategy.py:98).
 
-Example:
+Data sources are added inside the `init()` method:
 
 ```python
-def init(self):
-    self.add_data(CSVDataSource("eurusd.csv"), "EURUSD")
-    self.add_data(CSVDataSource("gbpusd.csv"), "GBPUSD")
+class MyStrategy(Strategy):
+    def init(self):
+        self.add_data(CSVDataSource("eurusd.csv"), "EURUSD")
+        self.add_data(CSVDataSource("gbpusd.csv"), "GBPUSD")
 
-def next(self):
-    eurusd_close = self.data["EURUSD"].CClose
-    gbpusd_close = self.data["GBPUSD"].CClose
+    def next(self):
+        eurusd_close = self.data["EURUSD"].CClose
+        gbpusd_close = self.data["GBPUSD"].CClose
 ```
 
 Each value is a [`DataSource`](../../src/quantex/datasource.py:6) object.
@@ -161,16 +161,27 @@ def next(self):
 
 ## Creating indicators
 
-Quantex does not provide a built-in indicator catalogue. Instead, you calculate arrays yourself and register them as time-aware indicators.
+Quantex provides a built-in indicator catalog via `self.ta` or `quantex.indicators`. You can also calculate arrays yourself and register them as time-aware indicators.
 
-Example:
+### Using built-in indicators
+
+```python
+def init(self):
+    close = self.data["TEST"].Close
+
+    # Use built-in indicators from self.ta
+    self.sma_20 = self.Indicator(self.ta.sma(close, 20))
+    self.sma_50 = self.Indicator(self.ta.sma(close, 50))
+    self.rsi_14 = self.Indicator(self.ta.rsi(close, 14))
+```
+
+### Using custom indicators
 
 ```python
 import pandas as pd
 
 
 def init(self):
-    self.add_data(CSVDataSource("data.csv"), "TEST")
     close = self.data["TEST"].Close
 
     sma_20 = pd.Series(close).rolling(window=20).mean().to_numpy()
@@ -292,13 +303,9 @@ That means the cash available to each symbol-specific broker is a fraction of th
 
 If you never call [`Strategy.add_data()`](../../src/quantex/strategy.py:98), the strategy has no symbol data and no broker to trade through.
 
-### 2. Using indicator values too early
+### 3. Using indicator values too early
 
 Rolling calculations often contain `NaN` values at the start. Guard with length checks before using recent values.
-
-### 3. Assuming built-in indicators exist
-
-The library gives you [`Strategy.Indicator()`](../../src/quantex/strategy.py:126), but not built-in SMA, EMA, or RSI functions.
 
 ### 4. Assuming orders fill at close
 
@@ -318,11 +325,14 @@ def next(self):
 
 ## Running the strategy
 
-Once the class is written, execution is always the same pattern:
+Once the class is written, execution follows this pattern:
 
 ```python
-strategy = MovingAverageCross(fast_period=5, slow_period=20)
-backtester = SimpleBacktester(strategy, cash=10_000)
+# 1. Create backtester with optional leverage
+# Data sources are added inside the strategy's init() method
+backtester = SimpleBacktester(MovingAverageCross(fast_period=5, slow_period=20), cash=10_000, leverage=1.0)
+
+# 2. Run the backtest
 report = backtester.run()
 
 print(report)

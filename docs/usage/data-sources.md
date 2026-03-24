@@ -184,25 +184,27 @@ class MyStrategy(Strategy):
 ### Multiple symbols
 
 ```python
-def init(self):
-    self.add_data(CSVDataSource("eurusd.csv"), "EURUSD")
-    self.add_data(CSVDataSource("gbpusd.csv"), "GBPUSD")
+class MyStrategy(Strategy):
+    def init(self):
+        self.add_data(CSVDataSource("eurusd.csv"), "EURUSD")
+        self.add_data(CSVDataSource("gbpusd.csv"), "GBPUSD")
 
-def next(self):
-    if self.data["EURUSD"].CClose > self.data["GBPUSD"].CClose:
-        self.positions["EURUSD"].buy(quantity=0.1)
+    def next(self):
+        if self.data["EURUSD"].CClose > self.data["GBPUSD"].CClose:
+            self.positions["EURUSD"].buy(quantity=0.1)
 ```
 
 ### Multiple timeframes
 
 ```python
-def init(self):
-    self.add_data(CSVDataSource("eurusd_m1.csv"), "EURUSD_M1")
-    self.add_data(CSVDataSource("eurusd_h1.csv"), "EURUSD_H1")
+class MyStrategy(Strategy):
+    def init(self):
+        self.add_data(CSVDataSource("eurusd_m1.csv"), "EURUSD_M1")
+        self.add_data(CSVDataSource("eurusd_h1.csv"), "EURUSD_H1")
 
-def next(self):
-    fast_price = self.data["EURUSD_M1"].CClose
-    slower_context = self.data["EURUSD_H1"].CClose
+    def next(self):
+        fast_price = self.data["EURUSD_M1"].CClose
+        slower_context = self.data["EURUSD_H1"].CClose
 ```
 
 When you attach multiple sources, remember that [`SimpleBacktester.run()`](../../src/quantex/backtester.py:443) splits starting cash evenly across the brokers created for those sources.

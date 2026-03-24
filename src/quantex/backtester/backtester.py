@@ -38,6 +38,7 @@ class SimpleBacktester:
     - Position management
     - Margin calls
     - P&L tracking
+    - Leverage for amplified position sizing
     
     Example:
         >>> from quantex import SimpleBacktester, CSVDataSource  
@@ -54,7 +55,8 @@ class SimpleBacktester:
                 commission: float = 0.002, 
                 commission_type: CommissionType = CommissionType.PERCENTAGE,
                 lot_size: int = 1,
-                margin_call: float = 0.5  ## 50% of the cash lost
+                margin_call: float = 0.5,  ## 50% of the cash lost
+                leverage: float = 1.0  ## Leverage multiplier (1.0 = no leverage)
                 ):
         """
         Initialize the backtester with strategy and configuration parameters.
@@ -70,16 +72,25 @@ class SimpleBacktester:
             lot_size (int, optional): Size of trading lots. Defaults to 1.
             margin_call (float, optional): Margin call threshold as fraction of
                 cash value. Defaults to 0.5 (50%).
+            leverage (float, optional): Leverage multiplier for position sizing.
+                Defaults to 1.0 (no leverage). For example:
+                - 2.0 = 2x leverage (control 2x the position with same cash)
+                - 0.5 = half leverage (control half the position)
                 
         Raises:
             ValueError: If strategy is None or commission rate is negative.
         """
+        if leverage < 0.1:
+            raise ValueError("leverage must be at least 0.1")
+        if leverage > 100:
+            raise ValueError("leverage cannot exceed 100")
         self.strategy = copy.deepcopy(strategy)
         self.cash = cash
         self.commission = commission
         self.commission_type = commission_type
         self.lot_size = lot_size
         self.margin_call = margin_call
+        self.leverage = leverage
         source = self.strategy.positions[list(self.strategy.positions.keys())[0]].source
         self.PnLRecord = np.zeros(len(source.data['Close']), dtype=np.float64)
 
@@ -140,6 +151,7 @@ class SimpleBacktester:
             broker.cash = per_position_cash
             broker.lot_size = self.lot_size
             broker.margin_call = self.margin_call
+            broker.leverage = self.leverage
             broker.commision = np.float64(self.commission)
             broker.commision_type = self.commission_type
 
@@ -302,6 +314,7 @@ class SimpleBacktester:
                 commission=self.commission,
                 commission_type=self.commission_type,
                 lot_size=self.lot_size,
+                leverage=self.leverage,
             )
             report = bt.run(progress_bar=False)
 
@@ -504,6 +517,7 @@ class SimpleBacktester:
                 self.commission,
                 self.commission_type,
                 self.lot_size,
+                self.leverage,
             ),
         ) as exe:
             # map the worker over param item tuples
@@ -561,6 +575,7 @@ class SimpleBacktester:
             commission=self.commission,
             commission_type=self.commission_type,
             lot_size=self.lot_size,
+            leverage=self.leverage,
         )
         best_report = bt.run(progress_bar=False)
 
@@ -679,6 +694,7 @@ class SimpleBacktester:
             commission: float,
             commission_type: CommissionType,
             lot_size: int,
+            leverage: float,
             objective: str,
             risk_tolerance: dict[str, float] | None,
             constraint: Callable[[dict[str, Any]], bool] | None,
@@ -750,6 +766,7 @@ class SimpleBacktester:
                     commission=commission,
                     commission_type=commission_type,
                     lot_size=lot_size,
+                    leverage=leverage,
                 )
                 report = bt.run(progress_bar=False)
                 
@@ -790,6 +807,7 @@ class SimpleBacktester:
             commission=self.commission,
             commission_type=self.commission_type,
             lot_size=self.lot_size,
+            leverage=self.leverage,
             objective=objective,
             risk_tolerance=risk_tolerance,
             constraint=constraint,
@@ -843,6 +861,7 @@ class SimpleBacktester:
             commission=self.commission,
             commission_type=self.commission_type,
             lot_size=self.lot_size,
+            leverage=self.leverage,
         )
         best_report = bt.run(progress_bar=False)
         best_metrics = _compute_backtest_metrics(best_report)
@@ -1024,6 +1043,7 @@ class SimpleBacktester:
                     commission=self.commission,
                     commission_type=self.commission_type,
                     lot_size=self.lot_size,
+                    leverage=self.leverage,
                 )
                 report = bt.run(progress_bar=False)
                 metrics = _compute_backtest_metrics(report)
@@ -1086,7 +1106,7 @@ class SimpleBacktester:
             best_params = {}
             best_validate_score = -np.inf
         
-        # Get full reports for best parameters
+            # Get full reports for best parameters
         train_report = None
         validate_report = None
         test_report = None
@@ -1108,6 +1128,7 @@ class SimpleBacktester:
                     commission=self.commission,
                     commission_type=self.commission_type,
                     lot_size=self.lot_size,
+                    leverage=self.leverage,
                 )
                 report = bt.run(progress_bar=False)
                 metrics = _compute_backtest_metrics(report)
@@ -1302,6 +1323,7 @@ class SimpleBacktester:
                 commission=self.commission,
                 commission_type=self.commission_type,
                 lot_size=self.lot_size,
+                leverage=self.leverage,
             )
             report = bt.run(progress_bar=False)
             metrics = _compute_backtest_metrics(report)
@@ -1425,6 +1447,7 @@ class SimpleBacktester:
                 commission=self.commission,
                 commission_type=self.commission_type,
                 lot_size=self.lot_size,
+                leverage=self.leverage,
             )
             report = bt.run(progress_bar=False)
             metrics = _compute_backtest_metrics(report)
