@@ -50,12 +50,87 @@ def _worker_init(
     }
 
 
+def _compute_metrics_numpy(
+    equity: np.ndarray,
+    periods_per_year: float,
+    n_trades: int,
+) -> dict[str, Any]:
+    """
+    Compute performance metrics using numpy arrays directly.
+    
+    This is more efficient than using pandas operations for the
+    inner loop of optimization since we avoid pandas overhead.
+    
+    Args:
+        equity: Numpy array of equity values over time.
+        periods_per_year: Number of periods in a year for annualization.
+        n_trades: Number of trades executed.
+        
+    Returns:
+        Dictionary with computed metrics.
+    """
+    # Calculate returns using numpy (avoid pandas overhead)
+    equity_arr = equity.astype(np.float64)
+    
+    # Handle edge cases
+    if len(equity_arr) < 2:
+        return {
+            "final_cash": float(equity_arr[-1]) if len(equity_arr) > 0 else 0.0,
+            "total_return": 0.0,
+            "sharpe": float("nan"),
+            "max_drawdown": 0.0,
+            "trades": n_trades,
+        }
+    
+    # Compute returns using numpy
+    returns = np.diff(equity_arr) / equity_arr[:-1]
+    
+    # Remove NaN/Inf values
+    valid_returns = returns[np.isfinite(returns)]
+    
+    # Total return
+    tot_return = float(equity_arr[-1] / equity_arr[0] - 1.0) if equity_arr[0] != 0 else 0.0
+    
+    # Sharpe ratio
+    annual_rf = 0.04
+    rf_per_period = annual_rf / periods_per_year
+    
+    if len(valid_returns) < 2:
+        sharpe = float("nan")
+    else:
+        excess = valid_returns - rf_per_period
+        mean_excess = np.mean(excess)
+        std_excess = np.std(excess, ddof=1)
+        if std_excess == 0:
+            sharpe = float("nan")
+        else:
+            sharpe = float((mean_excess / std_excess) * (periods_per_year ** 0.5))
+    
+    # Maximum drawdown using numpy
+    running_max = np.maximum.accumulate(equity_arr)
+    drawdowns = (equity_arr - running_max) / running_max
+    mdd = float(abs(np.min(drawdowns)))
+    
+    return {
+        "final_cash": float(equity_arr[-1]),
+        "total_return": tot_return,
+        "sharpe": sharpe,
+        "max_drawdown": mdd,
+        "trades": n_trades,
+    }
+
+
 def _worker_eval(param_items: tuple[tuple[str, Any], ...]) -> dict[str, Any]:
     """
     Worker evaluation function for parallel parameter optimization.
     
     This function runs in worker processes to evaluate a single
     parameter combination and return performance metrics.
+    
+    Optimizations applied:
+    1. Uses numpy for metric computation instead of pandas (faster)
+    2. Returns only essential metrics (reduces IPC overhead)
+    3. Explicit cleanup of references to help GC
     
     Args:
         param_items: Sequence of (key, value) pairs (tuple) to reconstruct dict.
@@ -104,39 +179,24 @@ def _worker_eval(param_items: tuple[tuple[str, Any], ...]) -> dict[str, Any]:
     )
     report = bt.run(progress_bar=False)
 
-    # Compute metrics
-    equity = report.PnlRecord.astype(float)
-    returns = equity.pct_change().dropna()
+    # Compute metrics using optimized numpy version
+    # This avoids pandas overhead for metric computation
+    # Use to_numpy() with copy=False for efficiency, convert to float64
+    equity_values = np.asarray(report.PnlRecord, dtype=np.float64)
+    metrics = _compute_metrics_numpy(
+        equity=equity_values,
+        periods_per_year=report.periods_per_year,
+        n_trades=len(report.orders),
+    )
 
-    annual_rf = 0.04
-    rf_per_period = annual_rf / report.periods_per_year
-
-    if len(returns) < 2 or returns.std(ddof=1) == 0:
-        sharpe = float("nan")
-    else:
-        excess = returns - rf_per_period
-        mean = excess.mean()
-        vol = excess.std(ddof=1)
-        sharpe = float((mean / vol) * (report.periods_per_year ** 0.5))
-
-    running_max = equity.cummax()
-    drawdown = ((equity - running_max) / running_max).min()
-    mdd = float(abs(drawdown))
-
-    tot_return = float(equity.iloc[-1] / equity.iloc[0] - 1.0)
-
-    # Keep worker returned payload small — don't send large objects back.
+    # Build result with params
     result: dict[str, Any] = {
         "params": params,
-        "final_cash": report.final_cash,
-        "total_return": tot_return,
-        "sharpe": sharpe,
-        "max_drawdown": mdd,
-        "trades": len(report.orders),
+        **metrics,
     }
 
     # Cleanup references to free memory inside worker
-    del strat, bt, report, equity, returns
+    del strat, bt, report
     gc.collect()
 
     return result
