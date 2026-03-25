@@ -178,7 +178,14 @@ class BacktestReport:
         # Risk-free per period from an annual rate
         rf_per_period = self.annual_rf / self.periods_per_year
 
-        if len(returns) < 2 or returns.std(ddof=1) == 0:
+        # If margin calls occurred, the backtest is invalid - position was forcibly closed
+        # This means the strategy was using too much leverage and the Sharpe is meaningless
+        margin_calls = len(self.margin_call_events or [])
+        if margin_calls > 0:
+            sharpe = np.nan
+            lo = np.nan
+            hi = np.nan
+        elif len(returns) < 2 or returns.std(ddof=1) == 0:
             sharpe = np.nan
             lo = np.nan
             hi = np.nan
@@ -203,7 +210,6 @@ class BacktestReport:
         tot_return = float(equity.iloc[-1] / equity.iloc[0] - 1.0)
         annualized_return = float((1.0 + tot_return) ** (self.periods_per_year / max(len(returns), 1)) - 1.0)
         tot_orders = len(self.orders)
-        margin_calls = len(self.margin_call_events or [])
 
         return (
             f"Starting Cash: ${self.starting_cash:,.2f}\n"

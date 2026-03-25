@@ -132,9 +132,9 @@ class TestBroker:
         assert commission == expected
 
     def test_debit_insufficient_funds(self, broker):
-        """Test debiting more than available cash."""
+        """Test debiting more than available equity."""
         broker.cash = 50.0
-        with pytest.raises(ValueError, match="Tried to purchase more than account balance"):
+        with pytest.raises(ValueError, match="Insufficient equity for this operation"):
             broker._debit(100.0)
 
     def test_credit(self, broker):
@@ -200,7 +200,7 @@ class TestBroker:
         assert abs(order.quantity - expected_leveraged_shares) < 1.0
 
     def test_leverage_margin_calculation(self, datasource):
-        """Test that leverage reduces margin used (cash required)."""
+        """Test that leverage affects margin requirement but not cash deduction."""
         broker = Broker(datasource)
         broker.leverage = 2.0  # 2x leverage
         broker._i = 0
@@ -218,12 +218,21 @@ class TestBroker:
         # Position: 98 shares at ~$102 = ~$10,000
         # With 2x leverage, margin = $10,000 / 2 = $5,000
         # Commission on full position: 98 * 102 * 0.002 = ~$20
+        # NOTE: In the new model, only commission is deducted from cash.
+        # Margin is tracked separately via used_margin, not deducted from cash.
         expected_position = 98.0
-        expected_margin = (expected_position * datasource.COpen) / 2.0
         expected_commission = expected_position * datasource.COpen * broker.commision
-        expected_cash = initial_cash - expected_margin - expected_commission
+        expected_cash = initial_cash - expected_commission  # Only commission deducted
         
-        assert abs(broker.cash - expected_cash) < 10.0
+        # Verify cash was reduced only by commission
+        assert abs(broker.cash - expected_cash) < 1.0
+        
+        # Verify position was opened correctly
+        assert abs(broker.position - expected_position) < 1.0
+        
+        # Verify used_margin is tracked correctly
+        expected_used_margin = abs(broker.position) * datasource.CClose / broker.leverage
+        assert abs(broker._get_used_margin() - expected_used_margin) < 1.0
 
     def test_leverage_amount_bypasses_leverage(self, datasource):
         """Test that using amount parameter bypasses leverage (exact shares bought)."""
@@ -269,7 +278,7 @@ class TestBroker:
             SimpleBacktester(TestStrategy(), leverage=150)
 
     def test_leverage_commission_on_full_position(self, datasource):
-        """Test that commission is calculated on full position value, not reduced by leverage."""
+        """Test that commission is calculated on full position value, only commission deducted from cash."""
         broker = Broker(datasource)
         broker.leverage = 2.0
         broker._i = 0
@@ -286,9 +295,7 @@ class TestBroker:
         expected_position = 98.0  # (10000 * 0.5) / 102 * 2
         expected_commission = expected_position * datasource.COpen * broker.commision
         
-        # Margin used (reduced by leverage)
-        expected_margin = (expected_position * datasource.COpen) / 2.0
-        
-        expected_cash = initial_cash - expected_margin - expected_commission
+        # Only commission is deducted from cash (not margin)
+        expected_cash = initial_cash - expected_commission
         
         assert abs(broker.cash - expected_cash) < 1.0

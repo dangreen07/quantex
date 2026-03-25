@@ -76,7 +76,12 @@ def _compute_backtest_metrics(report: BacktestReport) -> dict[str, Any]:
     annual_rf = report.annual_rf
     rf_per_period = annual_rf / report.periods_per_year
 
-    if len(returns) < 2 or returns.std(ddof=1) == 0:
+    # If margin calls occurred, the backtest is invalid - position was forcibly closed
+    # This means the strategy was using too much leverage and the Sharpe is meaningless
+    margin_calls = len(report.margin_call_events or [])
+    if margin_calls > 0:
+        sharpe = float("nan")
+    elif len(returns) < 2 or returns.std(ddof=1) == 0:
         sharpe = float("nan")
     else:
         excess = returns - rf_per_period

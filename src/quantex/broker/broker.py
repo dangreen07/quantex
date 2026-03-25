@@ -47,12 +47,20 @@ class Broker:
     
     The broker manages:
     - Current position and average price
-    - Cash management and margin calls
+    - Cash/balance management (realized P&L + commissions)
     - Order execution (market and limit orders)
     - Commission calculations
     - Stop loss and take profit order management
     - P&L record tracking
     - Leverage for amplified position sizing
+    - Margin tracking separate from equity
+    
+    Accounting Model:
+    - balance: Realized account balance after P&L and commissions
+    - used_margin = abs(position) * mark_price / leverage
+    - unrealized_pnl = position * (mark_price - position_avg_price)
+    - equity = balance + unrealized_pnl
+    - free_cash = equity - used_margin
     
     Example:
         >>> source = CSVDataSource("data.csv")  
@@ -74,8 +82,8 @@ class Broker:
         self.commision: np.float64 = np.float64(0.002)
         self.commision_type: CommissionType = CommissionType.PERCENTAGE
         self.lot_size: int = 1
-        self.margin_call: float = 0.5 ## 50% of the cash value
-        self.leverage: float = 1.0  ## Leverage multiplier (1.0 = no leverage)
+        self.margin_call: float = 0.5  # Margin call threshold (50% of used margin)
+        self.leverage: float = 1.0  # Leverage multiplier (1.0 = no leverage)
         self.share_decimals = 1
         self.orders: list[Order] = []
         self.complete_orders = []
@@ -87,6 +95,60 @@ class Broker:
         self.source = source
         self.PnLRecord = np.full(len(self.source.data['Close']), self.cash, dtype=np.float64)
         self.cashRecord = []
+
+    def _get_equity(self) -> np.float64:
+        """
+        Calculate current equity based on realized balance and unrealized P&L.
+        
+        Equity is always: balance + unrealized_pnl
+        This is consistent regardless of leverage.
+        
+        Returns:
+            np.float64: Current equity value.
+        """
+        unrealized_pnl = self._get_unrealized_pnl()
+        return self.cash + unrealized_pnl
+    
+    def _get_unrealized_pnl(self) -> np.float64:
+        """
+        Calculate unrealized P&L based on current position and entry price.
+        
+        unrealized_pnl = position * (mark_price - position_avg_price)
+        
+        Returns:
+            np.float64: Unrealized P&L, or 0 if position is zero.
+        """
+        if self.position == 0:
+            return np.float64(0)
+        mark_price = self.source.CClose
+        return self.position * (mark_price - self.position_avg_price)
+    
+    def _get_used_margin(self) -> np.float64:
+        """
+        Calculate margin currently used by open positions.
+        
+        used_margin = abs(position) * mark_price / leverage
+        
+        Returns:
+            np.float64: Margin used by current position.
+        """
+        if self.position == 0:
+            return np.float64(0)
+        mark_price = self.source.CClose
+        return abs(self.position) * mark_price / self.leverage
+    
+    def _get_free_cash(self) -> np.float64:
+        """
+        Calculate free cash available for new positions.
+        
+        free_cash = equity - used_margin
+        
+        Returns:
+            np.float64: Free cash available.
+        """
+        equity = self._get_equity()
+        used_margin = self._get_used_margin()
+        return equity - used_margin
 
     def _enqueue_order(self, order: Order) -> None:
         """
@@ -158,6 +220,8 @@ class Broker:
             - Limit orders only execute when price reaches the specified level.
             - Leverage amplifies position size - with 2x leverage and quantity=1,
               you control 2x the shares while only using 1x cash as margin.
+            - Opening positions deducts only commission from cash; equity remains
+              continuous because unrealized P&L is properly tracked.
                
         Example:
             >>> broker = Broker(source)  
@@ -210,12 +274,12 @@ class Broker:
         
         This method creates a sell order with optional limit price, stop loss,
         and take profit conditions. The quantity can be specified as a
-        percentage of current position or as an absolute amount.
+        percentage of available cash or as an absolute amount.
         
         Args:
-            quantity (float, optional): Quantity to sell as fraction of current
-                position (0 < quantity <= 1). Defaults to 1 (full position).
-                For example: 0.5 = sell 50% of current position.
+            quantity (float, optional): Quantity to sell as fraction of available
+                cash (0 < quantity <= 1). Defaults to 1 (full cash amount).
+                For example: 0.5 = sell shares worth 50% of available cash.
             limit (optional): Limit price for the order (same as limit parameter
                 in buy method). If None, creates a market order. Defaults to None.
             amount (np.float64 | None, optional): Absolute number of shares
@@ -238,7 +302,10 @@ class Broker:
               during the next iteration.
             - Selling reduces the current position and increases cash balance.
             - Stop loss and take profit apply to remaining position after sale.
-              
+            - Realized P&L is credited to cash immediately on close.
+            - Leverage amplifies short position size - with 2x leverage and quantity=1,
+              you can short 2x the shares while only using 1x cash as margin.
+               
         Example:
             >>> broker = Broker(source)  
             >>> broker.buy(quantity=1)  # First buy full position  
@@ -247,7 +314,7 @@ class Broker:
             >>> # Sell exactly 100 shares at limit price $52  
             >>> broker.sell(amount=100, limit=52.0)  
         """
-        ## Default to full account size sell
+        ## Default to full account sell
         if (quantity > 1 or quantity <= 0):
             raise ValueError("Quantity must be between 0 and 1")
         if (limit and limit < 0):
@@ -259,9 +326,15 @@ class Broker:
         else:
             type = OrderType.MARKET
         current_price = self.source.Close[-1]
-        total_shares = round((self.cash * quantity) / current_price, self.share_decimals)
         if (amount):
+            # When using absolute amount, still apply leverage to the base calculation
+            # but the user-provided amount is the final leveraged position size
             total_shares = amount
+        else:
+            # Calculate shares: base on cash * quantity, then apply leverage
+            base_shares = round((self.cash * quantity) / current_price, self.share_decimals)
+            # Apply leverage to increase position size
+            total_shares = round(base_shares * self.leverage, self.share_decimals)
         order = Order(
             side=OrderSide.SELL, 
             quantity=total_shares, 
@@ -372,41 +445,35 @@ class Broker:
         """
         return self.position == 0
 
-    def _debit(self, amount: np.float64): ## Give money to the market (buy shares)
+    def _debit(self, amount: np.float64): 
         """
         Deduct amount from cash balance (internal method).
         
         This is an internal method used to reduce the cash balance when
-        purchasing shares or paying commissions.
+        paying commissions or fees. It does NOT deduct position notional
+        value, as equity is tracked separately via unrealized P&L.
         
         Args:
             amount (np.float64): Amount to deduct from cash balance.
             
         Raises:
-            ValueError: If attempting to deduct more than available cash.
-            
-        Note:
-            This is an internal method and should not be called directly
-            by strategy code. Use public methods like buy() instead.
+            ValueError: If attempting to deduct more than available equity
+                (accounting for used margin).
         """
-        if (self.cash - amount < 0):
-            ## Order fail
-            raise ValueError("Tried to purchase more than account balance")
+        available = self._get_free_cash()
+        if (available - amount < 0):
+            raise ValueError("Insufficient equity for this operation")
         self.cash -= amount
 
-    def _credit(self, amount: np.float64): ## Take money from the market (sell shares)
+    def _credit(self, amount: np.float64): 
         """
         Add amount to cash balance (internal method).
         
         This is an internal method used to increase the cash balance when
-        selling shares or receiving funds.
+        realizing P&L from closing positions or receiving funds.
         
         Args:
             amount (np.float64): Amount to add to cash balance.
-            
-        Note:
-            This is an internal method and should not be called directly
-            by strategy code. Use public methods like sell() instead.
         """
         self.cash += amount
     
@@ -445,14 +512,98 @@ class Broker:
         Args:
             quantity (np.float64): Number of shares/contracts traded.
             price (np.float64): Execution price per share/contract.
-            
-        Note:
-            This is an internal method and should not be called directly
-            by strategy code. Commission is automatically applied during
-            order execution.
         """
         debit = self._calc_commission(quantity, price)
         self._debit(debit)
+
+    def _execute_opening_order(self, side: OrderSide, quantity: np.float64, price: np.float64):
+        """
+        Execute an order that opens or increases a position.
+        
+        This handles the accounting for opening positions:
+        - Updates position size and average price
+        - Deducts only commission from balance (not notional exposure)
+        - Equity remains continuous because unrealized P&L is properly tracked
+        
+        Args:
+            side: BUY or SELL side
+            quantity: Number of shares/contracts
+            price: Execution price
+        """
+        old_pos = self.position
+        if side == OrderSide.BUY:
+            new_pos = old_pos + quantity
+        else:
+            new_pos = old_pos - quantity
+        
+        # Update average price using weighted average
+        if old_pos == 0:
+            # No existing position - new avg price is fill price
+            self.position_avg_price = price
+        elif same_sign(old_pos, new_pos):
+            if abs(new_pos) > abs(old_pos):
+                # Increasing exposure - update weighted average
+                self.position_avg_price = (
+                    old_pos * self.position_avg_price + quantity * price
+                ) / new_pos
+            # If reducing exposure, keep avg price unchanged
+        else:
+            # Crossing through zero - remainder becomes new position with fill price
+            self.position_avg_price = price
+        
+        # Only deduct commission from balance (NOT margin/notional)
+        # Equity remains continuous because unrealized P&L calculation
+        # accounts for the new position at current market price
+        self._apply_commission(quantity, price)
+        
+        self.position = new_pos
+        
+        # Reset avg price if position is closed
+        if self.position == 0:
+            self.position_avg_price = np.float64(0)
+
+    def _execute_closing_order(self, side: OrderSide, quantity: np.float64, price: np.float64):
+        """
+        Execute an order that closes or reduces a position.
+        
+        This handles the accounting for closing positions:
+        - Realizes P&L into balance
+        - Updates position size
+        - Keeps remaining avg price unchanged if partially reduced
+        
+        Args:
+            side: BUY or SELL side
+            quantity: Number of shares/contracts to close
+            price: Execution price
+        """
+        old_pos = self.position
+        if side == OrderSide.BUY:
+            new_pos = old_pos + quantity  # Buying to close short
+        else:
+            new_pos = old_pos - quantity  # Selling to close long
+        
+        # Calculate realized P&L for the closed portion
+        # P&L = closed_quantity * (exit_price - entry_price)
+        # For long: exit_price - entry_price
+        # For short: entry_price - exit_price (we bought at lower to cover, profit)
+        closed_quantity = abs(old_pos - new_pos)
+        if old_pos > 0:  # Closing long position
+            realized_pnl = closed_quantity * (price - self.position_avg_price)
+        elif old_pos < 0:  # Closing short position
+            realized_pnl = closed_quantity * (self.position_avg_price - price)
+        else:
+            realized_pnl = np.float64(0)
+        
+        # Credit realized P&L and commission to balance
+        self._credit(realized_pnl)
+        self._apply_commission(quantity, price)
+        
+        self.position = new_pos
+        
+        # Reset avg price if position is fully closed
+        if self.position == 0:
+            self.position_avg_price = np.float64(0)
+        # If partially closed but still same direction, keep avg price unchanged
 
     def _iterate(self, current_index: int):
         """
@@ -490,77 +641,27 @@ class Broker:
                         if (order.side == OrderSide.BUY):
                             if (not order.price == None and self.source.COpen <= order.price):
                                 ## We can buy it
-                                old_pos = self.position
-                                new_pos = old_pos + order.quantity
-                                if (old_pos == 0):
-                                    self.position_avg_price = order.price
-                                elif same_sign(old_pos, new_pos):
-                                    if (abs(new_pos) > abs(old_pos)):
-                                        self.position_avg_price = (old_pos * self.position_avg_price + order.quantity * order.price) / new_pos
+                                self._execute_order(order.side, order.quantity, order.price)
+                                if (order.stop_loss or order.take_profit):
+                                    order.status = OrderStatus.ACTIVE ## Will need to be checked on for each update
+                                    self.active_order = order
                                 else:
-                                    self.position_avg_price = order.price
-                                # Calculate margin (cash used) for leveraged positions
-                                margin = order.price * order.quantity / self.leverage
-                                self._debit(margin)
-                                self._apply_commission(order.quantity, order.price)
-                                self.position = new_pos
+                                    order.status = OrderStatus.COMPLETE ## We are done with it
+                                    to_delete.append(order)
                         else:
                             if (not order.price == None and self.source.COpen >= order.price):
                                 ## We can sell it
-                                old_pos = self.position
-                                new_pos = old_pos - order.quantity
-                                if (old_pos == 0):
-                                    self.position_avg_price = order.price
-                                elif same_sign(old_pos, new_pos):
-                                    if (abs(new_pos) > abs(old_pos)):
-                                        self.position_avg_price = (old_pos * self.position_avg_price + order.quantity * order.price) / new_pos
+                                self._execute_order(order.side, order.quantity, order.price)
+                                if (order.stop_loss or order.take_profit):
+                                    order.status = OrderStatus.ACTIVE ## Will need to be checked on for each update
+                                    self.active_order = order
                                 else:
-                                    self.position_avg_price = order.price
-                                # Calculate margin released for leveraged positions
-                                margin = order.price * order.quantity / self.leverage
-                                self._credit(margin)
-                                self._apply_commission(order.quantity, order.price)
-                                self.position = new_pos
-                        if (order.stop_loss or order.take_profit):
-                            order.status = OrderStatus.ACTIVE ## Will need to be checked on for each update
-                            self.active_order = order
-                        else:
-                            order.status = OrderStatus.COMPLETE ## We are done with it
-                            to_delete.append(order)
+                                    order.status = OrderStatus.COMPLETE ## We are done with it
+                                    to_delete.append(order)
                     else:
                         try:
-                            if (order.side == OrderSide.BUY):
-                                old_pos = self.position
-                                new_pos = old_pos + order.quantity
-                                price = self.source.COpen
-                                if (old_pos == 0):
-                                    self.position_avg_price = price
-                                elif same_sign(old_pos, new_pos):
-                                    if (abs(new_pos) > abs(old_pos)):
-                                        self.position_avg_price = (old_pos * self.position_avg_price + order.quantity * price) / new_pos
-                                else:
-                                    self.position_avg_price = price
-                                # Calculate margin (cash used) for leveraged positions
-                                margin = self.source.COpen * order.quantity / self.leverage
-                                self._debit(margin)
-                                self._apply_commission(order.quantity, self.source.COpen)
-                                self.position = new_pos
-                            else:
-                                old_pos = self.position
-                                new_pos = old_pos - order.quantity
-                                price = self.source.COpen
-                                if (old_pos == 0):
-                                    self.position_avg_price = price
-                                elif same_sign(old_pos, new_pos):
-                                    if (abs(new_pos) > abs(old_pos)):
-                                        self.position_avg_price = (old_pos * self.position_avg_price + order.quantity * price) / new_pos
-                                else:
-                                    self.position_avg_price = price
-                                # Calculate margin released for leveraged positions
-                                margin = self.source.COpen * order.quantity / self.leverage
-                                self._credit(margin)
-                                self._apply_commission(order.quantity, self.source.COpen)
-                                self.position = new_pos
+                            price = self.source.COpen
+                            self._execute_order(order.side, order.quantity, price)
                             if (order.stop_loss or order.take_profit):
                                 order.status = OrderStatus.ACTIVE
                                 self.active_order = order
@@ -577,61 +678,111 @@ class Broker:
                             (order.take_profit and self.source.COpen >= order.take_profit)
                             or (order.stop_loss and self.source.COpen <= order.stop_loss)
                             )):
-                            close_order = Order(
-                                side=OrderSide.SELL, 
-                                quantity=order.quantity, 
-                                type=OrderType.MARKET, 
-                                price= None, 
-                                stop_loss= None, 
-                                take_profit= None, 
-                                status=OrderStatus.PENDING,
-                                timestamp=self.source.Index[self._i],
-                                reduce_only=True,
-                                )
-                            self._enqueue_order(close_order)
-                            order.status = OrderStatus.COMPLETE
-                            if self.active_order is order:
-                                self.active_order = None
-                            self.complete_orders.append(order)
-                            to_delete.append(order)
+                        close_order = Order(
+                            side=OrderSide.SELL, 
+                            quantity=order.quantity, 
+                            type=OrderType.MARKET, 
+                            price= None, 
+                            stop_loss= None, 
+                            take_profit= None, 
+                            status=OrderStatus.PENDING,
+                            timestamp=self.source.Index[self._i],
+                            reduce_only=True,
+                            )
+                        self._enqueue_order(close_order)
+                        order.status = OrderStatus.COMPLETE
+                        if self.active_order is order:
+                            self.active_order = None
+                        self.complete_orders.append(order)
+                        to_delete.append(order)
                     elif(order.side == OrderSide.SELL
                          and (
                              (order.take_profit and self.source.COpen <= order.take_profit) 
                              or (order.stop_loss and self.source.COpen >= order.stop_loss)
                              )):
-                            close_order = Order(
-                                side=OrderSide.BUY,
-                                quantity=order.quantity,
-                                type=OrderType.MARKET,
-                                price=None,
-                                stop_loss=None,
-                                take_profit=None,
-                                status=OrderStatus.PENDING,
-                                timestamp=self.source.Index[self._i],
-                                reduce_only=True,
-                            )
-                            self._enqueue_order(close_order)
-                            order.status = OrderStatus.COMPLETE
-                            if self.active_order is order:
-                                self.active_order = None
-                            self.complete_orders.append(order)
-                            to_delete.append(order)
+                        close_order = Order(
+                            side=OrderSide.BUY,
+                            quantity=order.quantity,
+                            type=OrderType.MARKET,
+                            price=None,
+                            stop_loss=None,
+                            take_profit=None,
+                            status=OrderStatus.PENDING,
+                            timestamp=self.source.Index[self._i],
+                            reduce_only=True,
+                        )
+                        self._enqueue_order(close_order)
+                        order.status = OrderStatus.COMPLETE
+                        if self.active_order is order:
+                            self.active_order = None
+                        self.complete_orders.append(order)
+                        to_delete.append(order)
         for item in to_delete:
             self.orders.remove(item)
             if self.pending_close_order is item:
                 self.pending_close_order = None
-        unrealized = self.position * self.source.CClose
-        equity = self.cash + unrealized
-        # Calculate actual margin used, accounting for leverage
-        actual_margin = abs(self.position) * self.source.CClose / self.leverage
-        margin_call_threshold = self.margin_call * actual_margin
-        if equity < margin_call_threshold and self.position < 0:
+        
+        # Calculate equity: balance + unrealized P&L
+        # This is always correct regardless of leverage
+        equity = self._get_equity()
+        
+        # Clamp equity to 0 minimum to prevent negative equity
+        equity = max(np.float64(0), equity)
+        self.PnLRecord[self._i] = equity
+        
+        # Check margin call using equity and used margin
+        # Margin call triggers when equity falls below margin_call threshold of used margin
+        used_margin = self._get_used_margin()
+        margin_call_threshold = self.margin_call * used_margin
+        
+        # Only trigger margin call if there's an open position and equity is below threshold
+        if used_margin > 0 and equity < margin_call_threshold:
             self.margin_call_triggered = True
             self.margin_call_events.append({
                 "timestamp": self.source.Index[self._i],
                 "equity": equity,
+                "used_margin": used_margin,
                 "margin_call_threshold": margin_call_threshold,
                 "position": self.position,
             })
-            self.close() ## Close all positions immediately, margin call
-        self.PnLRecord[self._i] = equity
+            self.close()  # Close all positions immediately, margin call
+
+    def _execute_order(self, side: OrderSide, quantity: np.float64, price: np.float64):
+        """
+        Execute an order, routing to opening or closing logic.
+        
+        Args:
+            side: BUY or SELL side
+            quantity: Number of shares/contracts
+            price: Execution price
+        """
+        # Determine if this is opening or closing based on position direction
+        old_pos = self.position
+        
+        if old_pos == 0:
+            # No position - any order opens a new position
+            self._execute_opening_order(side, quantity, price)
+        elif side == OrderSide.BUY:
+            if old_pos > 0:
+                # Currently long - buying adds to position
+                self._execute_opening_order(side, quantity, price)
+            else:
+                # Currently short - buying closes/reduces position
+                close_qty = min(quantity, abs(old_pos))
+                if close_qty > 0:
+                    self._execute_closing_order(side, close_qty, price)
+                if quantity > close_qty:
+                    # Remainder opens new long position
+                    self._execute_opening_order(side, quantity - close_qty, price)
+        else:  # side == OrderSide.SELL
+            if old_pos < 0:
+                # Currently short - selling adds to position
+                self._execute_opening_order(side, quantity, price)
+            else:
+                # Currently long - selling closes/reduces position
+                close_qty = min(quantity, abs(old_pos))
+                if close_qty > 0:
+                    self._execute_closing_order(side, close_qty, price)
+                if quantity > close_qty:
+                    # Remainder opens new short position
+                    self._execute_opening_order(side, quantity - close_qty, price)

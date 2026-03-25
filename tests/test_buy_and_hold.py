@@ -27,4 +27,5 @@ class TestBuyAndHold:
         bt = SimpleBacktester(strategy, cash=1_000, commission=0)
         report = bt.run()
         actual_return = (report.PnlRecord.iloc[-1] - report.PnlRecord.iloc[0]) / report.PnlRecord.iloc[0]
-        assert actual_return == expected_return
+        # Use pytest.approx for floating point comparison
+        assert actual_return == pytest.approx(expected_return, rel=1e-10)
