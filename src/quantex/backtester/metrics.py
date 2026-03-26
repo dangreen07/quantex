@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import pandas as pd
 import numpy as np
+from datetime import timedelta
+from statistics import median
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -31,42 +33,36 @@ def max_drawdown(equity: pd.Series) -> float:
     max_dd = drawdown.min()
     return float(abs(max_dd))  # return as positive percentage
 
-
-def _infer_periods_per_year(index: pd.Index, default: int = 252 * 24 * 60) -> int:
+def _infer_periods_per_year(
+    index: pd.Index,
+    default: int = 252 * 24 * 60,
+) -> int:
     """
     Infer the number of trading periods per year from a datetime index.
-    
-    This function analyzes the time differences in the index to determine
-    the appropriate number of periods per year for annualized calculations.
+
     Falls back to minute-level trading (252 trading days * 24 hours * 60 minutes)
     if the index cannot be analyzed or contains insufficient data.
-    
-    Args:
-        index (pd.Index): DatetimeIndex containing timestamps.
-        default (int, optional): Default periods per year for minute trading.
-            Defaults to 252 * 24 * 60 (minute-level data).
-            
-    Returns:
-        int: Estimated number of trading periods per year.
-        
-    Example:
-        >>> dates = pd.date_range('2020-01-01', periods=100, freq='D')  
-        >>> _infer_periods_per_year(dates)  
-        252  # Daily trading periods
     """
-    # Simple inference; falls back to minute trading year if uncertain
     if not isinstance(index, pd.DatetimeIndex) or len(index) < 3:
         return default
-    dt = np.diff(index.values).astype("timedelta64[s]").astype(float)
-    if not np.isfinite(dt).any():
-        return default
-    med_sec = np.median(dt[dt > 0])
-    if not np.isfinite(med_sec) or med_sec <= 0:
-        return default
-    periods_per_day = 86400.0 / med_sec
-    # Assume 252 trading days/year
-    return int(round(252 * periods_per_day))
 
+    times = index.to_pydatetime()
+
+    deltas = []
+    for prev, curr in zip(times[:-1], times[1:]):
+        delta = curr - prev
+        if isinstance(delta, timedelta) and delta.total_seconds() > 0:
+            deltas.append(delta.total_seconds())
+
+    if not deltas:
+        return default
+
+    med_sec = median(deltas)
+    if med_sec <= 0:
+        return default
+
+    periods_per_day = 86400.0 / med_sec
+    return int(round(252 * periods_per_day))
 
 def _compute_backtest_metrics(report: BacktestReport) -> dict[str, Any]:
     """Compute performance metrics from a BacktestReport."""
