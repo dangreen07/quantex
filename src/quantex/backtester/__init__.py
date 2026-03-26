@@ -18,6 +18,14 @@ from .parallel import _worker_init, _worker_eval
 # Monte Carlo simulation
 from .montecarlo import MonteCarloResult, MonteCarloMode
 
+# Walk-forward optimization
+from .walk_forward import (
+    WalkForwardResult,
+    WalkForwardWindow,
+    WalkForwardAnalyzer,
+    walk_forward_analyze,
+)
+
 __all__ = [
     # Constants
     "DataSplitMode",
@@ -42,4 +50,9 @@ __all__ = [
     # Monte Carlo
     "MonteCarloResult",
     "MonteCarloMode",
+    # Walk-forward optimization
+    "WalkForwardResult",
+    "WalkForwardWindow",
+    "WalkForwardAnalyzer",
+    "walk_forward_analyze",
 ]

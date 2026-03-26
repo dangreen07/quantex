@@ -13,6 +13,8 @@ The implementation supports:
   - [`SimpleBacktester.optimize_with_split()`](../../src/quantex/backtester/backtester.py:1059)
 - **Gradient descent optimization** via:
   - [`SimpleBacktester.optimize_gradient_descent()`](../../src/quantex/backtester/backtester.py:1336)
+- **Walk-forward optimization** via:
+  - [`WalkForwardAnalyzer`](../../src/quantex/backtester/walk_forward.py) - Rolling window optimization
 
 This guide focuses on what those methods actually do in the current codebase.
 
@@ -523,6 +525,165 @@ history = result.all_results
 print(history[['iteration', 'validate_score', 'gradient_magnitude']])
 ```
 
+## Walk-Forward Optimization
+
+Walk-forward optimization is a rigorous method for evaluating trading strategies that simulates real-world deployment conditions. Unlike train/validate/test splits which use fixed boundaries, walk-forward analysis uses rolling windows to test parameter stability over time.
+
+### How walk-forward works
+
+1. **Training window**: Optimize parameters on a rolling historical window
+2. **Testing window**: Evaluate the best parameters on the subsequent out-of-sample period
+3. **Slide forward**: Move the window forward and repeat
+4. **Aggregate**: Compute statistics across all windows
+
+This approach answers the question: "If I had used this optimization method in the past, how would it have performed on unseen future data?"
+
+### Basic example
+
+```python
+from quantex.backtester.walk_forward import WalkForwardAnalyzer, walk_forward_analyze
+from quantex import SimpleBacktester, CSVDataSource, Strategy
+
+class MovingAverageCross(Strategy):
+    def __init__(self, fast_period=10, slow_period=30):
+        super().__init__()
+        self.fast_period = fast_period
+        self.slow_period = slow_period
+
+    def init(self):
+        self.add_data(CSVDataSource("data.csv"), "TEST")
+        # ... indicator setup ...
+
+    def next(self):
+        # ... trading logic ...
+
+
+backtester = SimpleBacktester(MovingAverageCross(), cash=10_000)
+
+# Method 1: Using the convenience function
+result = walk_forward_analyze(
+    backtester=backtester,
+    optimizer=lambda bt, params, **kwargs: bt.optimize(params, **kwargs),
+    params={
+        "fast_period": [5, 10, 15],
+        "slow_period": [20, 30, 50],
+    },
+    train_periods=252,   # 1 year training (daily data)
+    test_periods=63,     # 3 months testing
+    step_periods=63,     # Move forward 3 months each window
+    constraint=lambda p: p["fast_period"] < p["slow_period"],
+    objective="sharpe",
+)
+
+# Method 2: Using the analyzer class directly
+analyzer = WalkForwardAnalyzer(
+    backtester=backtester,
+    train_periods=252,
+    test_periods=63,
+    step_periods=63,
+)
+
+result = analyzer.analyze(
+    optimizer=lambda bt, params, **kwargs: bt.optimize(params, **kwargs),
+    params={"fast_period": [5, 10, 15], "slow_period": [20, 30, 50]},
+    constraint=lambda p: p["fast_period"] < p["slow_period"],
+)
+```
+
+### Understanding the results
+
+The [`WalkForwardResult`](../../src/quantex/backtester/walk_forward.py:40) object contains:
+
+- `n_windows`: Number of walk-forward windows
+- `window_results`: List of [`WalkForwardWindow`](../../src/quantex/backtester/walk_forward.py:20) objects
+- `aggregated_metrics`: Aggregated statistics across all windows
+- `all_windows_results_df`: DataFrame with all results
+
+```python
+# View aggregated results
+print(result)
+
+# Average out-of-sample Sharpe ratio
+print(f"Average OOS Sharpe: {result.aggregated_metrics['out_of_sample_sharpe_mean']:.2f}")
+
+# Win rate (% of windows with positive OOS return)
+print(f"Win rate: {result.aggregated_metrics['oos_win_rate']:.1%}")
+
+# Stability ratio (higher = more stable parameters)
+print(f"Stability ratio: {result.aggregated_metrics['oos_to_is_ratio_mean']:.2f}")
+```
+
+### Analyzing parameter stability
+
+Walk-forward analysis reveals how stable your optimized parameters are over time:
+
+```python
+# Analyze stability of a specific parameter
+stability = result.get_param_stability("fast_period")
+print(f"Fast period: mean={stability['mean']:.1f}, std={stability['std']:.1f}")
+print(f"Range: [{stability['min']:.1f}, {stability['max']:.1f}]")
+print(f"Coefficient of variation: {stability['cv']:.2f}")
+```
+
+### Using with different optimizers
+
+Walk-forward analysis works with any optimizer function:
+
+```python
+# Grid search
+result = walk_forward_analyze(
+    backtester=bt,
+    optimizer=lambda bt, params, **kwargs: bt.optimize(params, **kwargs),
+    params={"fast": [5, 10, 15], "slow": [20, 30, 50]},
+    train_periods=252,
+    test_periods=63,
+)
+
+# Parallel optimization
+result = walk_forward_analyze(
+    backtester=bt,
+    optimizer=lambda bt, params, **kwargs: bt.optimize_parallel(params, workers=2, **kwargs),
+    params={"fast": [5, 10, 15], "slow": [20, 30, 50]},
+    train_periods=252,
+    test_periods=63,
+)
+
+# Optuna Bayesian optimization
+result = walk_forward_analyze(
+    backtester=bt,
+    optimizer=lambda bt, params, **kwargs: bt.optimize_optuna(
+        param_space={k: (min(v), max(v)) if len(v) > 2 else v 
+                    for k, v in params.items()},
+        n_trials=50,
+        **kwargs,
+    ),
+    params={"fast": [5, 10, 15], "slow": [20, 30, 50]},
+    train_periods=252,
+    test_periods=63,
+)
+```
+
+### Window configuration tips
+
+- **Train periods**: Should be long enough to capture market cycles (e.g., 1 year for daily data)
+- **Test periods**: Should represent realistic holding/deployment periods (e.g., 1-3 months)
+- **Step periods**: Controls overlap between windows
+  - Equal to test_periods = non-overlapping windows
+  - Smaller than test_periods = overlapping windows (more windows, more data)
+
+### Visualizing results
+
+```python
+# Plot walk-forward results
+result.plot()
+```
+
+The plot shows:
+1. In-sample vs out-of-sample Sharpe ratios per window
+2. In-sample vs out-of-sample returns per window
+3. Aggregated Sharpe statistics
+4. Summary statistics table
+
 ## Helper Functions
 
 Quantex provides utility functions for data splitting:
@@ -548,13 +709,14 @@ print(f"Test: {split.test_start}-{split.test_end}")
 
 ## Summary
 
-Quantex provides five optimization approaches:
+Quantex provides six optimization approaches:
 
 1. **[`SimpleBacktester.optimize()`](../../src/quantex/backtester/backtester.py:485)**: Sequential grid search
 2. **[`SimpleBacktester.optimize_parallel()`](../../src/quantex/backtester/backtester.py:581)**: Parallel grid search with adaptive chunksize
 3. **[`SimpleBacktester.optimize_optuna()`](../../src/quantex/backtester/backtester.py:709)**: Bayesian optimization (recommended for large search spaces)
 4. **[`SimpleBacktester.optimize_with_split()`](../../src/quantex/backtester/backtester.py:1059)**: Grid search with train/validate/test splits
 5. **[`SimpleBacktester.optimize_gradient_descent()`](../../src/quantex/backtester/backtester.py:1336)**: Gradient descent with train/validate/test splits
+6. **[`WalkForwardAnalyzer`](../../src/quantex/backtester/walk_forward.py)**: Rolling window optimization with any optimizer
 
 Keep these points in mind:
 
@@ -562,7 +724,7 @@ Keep these points in mind:
 2. Constraints are optional but often necessary
 3. Train/validate/test splits help prevent overfitting
 4. Gradient descent is suitable for continuous parameters
-5. Optimization results are only as meaningful as your validation process
+5. **Walk-forward analysis is the most rigorous method** - it simulates real-world deployment
 6. **For large search spaces (>10,000 combos), use `optimize_optuna()`** - it's 50-100x faster
 7. **For parallel grid search, use `chunksize="auto"`** - reduces IPC overhead
 
@@ -575,6 +737,7 @@ Keep these points in mind:
 | `optimize_optuna()` | Large grids, continuous params | 50-100x |
 | `optimize_with_split()` | Preventing overfitting | 1x |
 | `optimize_gradient_descent()` | Continuous parameters | Varies |
+| `WalkForwardAnalyzer` | Real-world simulation | Varies |
 
 For the underlying simulation model, see [Backtesting guide](./backtesting.md).
 
