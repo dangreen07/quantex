@@ -155,7 +155,7 @@ class SimpleBacktester:
             broker.margin_call = self.margin_call
             broker.leverage = self.leverage
             broker.commision = np.float64(self.commission)
-            broker.commision_type = self.commission_type
+            broker.commision_type = self.commission_type  # type: ignore[assignment]
 
         self.strategy.init()
 
@@ -184,7 +184,8 @@ class SimpleBacktester:
             tradeRecord.extend(trades)
             orders.extend(val.complete_orders)
 
-        index = list(self.strategy.positions.values())[0].source.data['Close'].index
+        source = list(self.strategy.positions.values())[0].source
+        index = source.data['Close'].index
         return BacktestReport(
             starting_cash=np.float64(self.cash),
             final_cash=self.PnLRecord[-1],
@@ -195,7 +196,8 @@ class SimpleBacktester:
                 event
                 for broker in self.strategy.positions.values()
                 for event in getattr(broker, "margin_call_events", [])
-            ] or None)
+            ] or None,
+            data=source.data.copy())
     
     def optimize(
         self,

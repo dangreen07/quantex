@@ -1,6 +1,7 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
+import mplfinance as mpf
 import numpy as np
 import pandas as pd
 from matplotlib import pyplot as plt
@@ -50,7 +51,9 @@ class BacktestReport:
     final_cash (np.float64): Final cash amount at end of backtest.
     PnlRecord (pd.Series): Time series of P&L values throughout the backtest.
     orders (list[Order]): List of all orders executed during the backtest.
+    tradeRecord (list[np.float64]): List of individual trade P&L values.
     margin_call_events (list[dict]): Margin call events triggered during the run.
+    data (pd.DataFrame): OHLC price data used in the backtest.
     """
     starting_cash: np.float64
     final_cash: np.float64
@@ -58,6 +61,7 @@ class BacktestReport:
     orders: list
     tradeRecord: list[np.float64]
     margin_call_events: list[dict] | None = None
+    data: pd.DataFrame = field(default_factory=lambda: pd.DataFrame())
 
     @property
     def annual_rf(self):
@@ -160,6 +164,125 @@ class BacktestReport:
 
         plt.tight_layout()
         plt.show()
+
+    def plot_trades(
+        self,
+        figsize: tuple = (16, 8),
+        style: str = "yahoo",
+        title: str | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        volume: bool = True,
+    ) -> None:
+        """
+        Plot the price chart with trade entry and exit markers.
+        
+        Creates a candlestick chart showing all trades with:
+        - Green triangles (^) for buy entries
+        - Red triangles (v) for sell exits
+        - Position is closed when an order in the opposite direction is executed
+        
+        Args:
+            figsize (tuple, optional): Figure size as (width, height) in inches.
+                Defaults to (16, 8).
+            style (str, optional): mplfinance style name. Defaults to "yahoo".
+            title (str, optional): Chart title. Defaults to None (uses default title).
+            start_date (str, optional): Start date filter (e.g., '2026-03-01').
+                Defaults to None (show all).
+            end_date (str, optional): End date filter (e.g., '2026-03-31').
+                Defaults to None (show all).
+            volume (bool, optional): Whether to show volume subplot. Defaults to True.
+            
+        Raises:
+            ValueError: If no OHLC data is available in the backtest report.
+            ValueError: If no orders are available.
+        """
+        from ..broker.types import OrderSide
+        
+        if self.data.empty:
+            raise ValueError(
+                "No OHLC data available in backtest report. "
+                "Ensure the backtest was run with data storage enabled."
+            )
+        
+        if not self.orders:
+            raise ValueError("No orders available in backtest report.")
+        
+        # Filter data by date range if specified
+        data = self.data.copy()
+        if start_date is not None:
+            data = data[data.index > start_date]
+        if end_date is not None:
+            data = data[data.index <= end_date]
+        
+        # Create marker series for buy and sell signals
+        buy_signal = pd.Series(index=data.index, dtype=float)
+        sell_signal = pd.Series(index=data.index, dtype=float)
+        
+        # Track positions to determine entries and exits
+        # Buy orders that are not reduce_only are entries
+        # Sell orders that are reduce_only are exits (closing long positions)
+        # Similarly for sells: Sell orders that are not reduce_only are entries
+        # Buy orders that are reduce_only are exits (closing short positions)
+        
+        for order in self.orders:
+            timestamp = order.timestamp
+            
+            # Only plot if timestamp is in our filtered data range
+            if timestamp not in data.index:
+                continue
+            
+            price = order.price
+            if price is None:
+                continue
+            
+            if order.side == OrderSide.BUY:
+                if not order.reduce_only:
+                    # Buy entry (opening long position)
+                    buy_signal.loc[timestamp] = price
+                else:
+                    # Buy to close short position (exit)
+                    sell_signal.loc[timestamp] = price
+            else:  # OrderSide.SELL
+                if not order.reduce_only:
+                    # Sell entry (opening short position)
+                    buy_signal.loc[timestamp] = price
+                else:
+                    # Sell to close long position (exit)
+                    sell_signal.loc[timestamp] = price
+        
+        # Build addplot list with markers
+        apds = [
+            mpf.make_addplot(
+                buy_signal,
+                type="scatter",
+                marker="^",
+                markersize=120,
+                color="green",
+            ),
+            mpf.make_addplot(
+                sell_signal,
+                type="scatter",
+                marker="v",
+                markersize=120,
+                color="red",
+            ),
+        ]
+        
+        # Generate default title if not provided
+        if title is None:
+            total_trades = len(self.orders)
+            title = f"Price chart with trade entries/exits ({total_trades} orders)"
+        
+        mpf.plot(
+            data,
+            type="candle",
+            volume=volume,
+            addplot=apds,
+            figsize=figsize,
+            style=style,
+            title=title,
+        )
 
     def __str__(self) -> str:
         """
