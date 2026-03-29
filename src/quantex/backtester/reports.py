@@ -6,6 +6,8 @@ import numpy as np
 import pandas as pd
 from matplotlib import pyplot as plt
 
+from ..broker.types import Order
+
 
 @dataclass
 class OptimizationResult:
@@ -58,7 +60,7 @@ class BacktestReport:
     starting_cash: np.float64
     final_cash: np.float64
     PnlRecord: pd.Series
-    orders: list
+    orders: list[Order]
     tradeRecord: list[np.float64]
     margin_call_events: list[dict] | None = None
     data: pd.DataFrame = field(default_factory=lambda: pd.DataFrame())
@@ -215,59 +217,61 @@ class BacktestReport:
         if end_date is not None:
             data = data[data.index <= end_date]
         
-        # Create marker series for buy and sell signals
+        # Create marker series with the same index as the data
         buy_signal = pd.Series(index=data.index, dtype=float)
         sell_signal = pd.Series(index=data.index, dtype=float)
-        
-        # Track positions to determine entries and exits
-        # Buy orders that are not reduce_only are entries
-        # Sell orders that are reduce_only are exits (closing long positions)
-        # Similarly for sells: Sell orders that are not reduce_only are entries
-        # Buy orders that are reduce_only are exits (closing short positions)
         
         for order in self.orders:
             timestamp = order.timestamp
             
-            # Only plot if timestamp is in our filtered data range
+            # Only set signal if timestamp exists in the data index
             if timestamp not in data.index:
                 continue
             
-            price = order.price
-            if price is None:
-                continue
-            
+            # Set the signal at the order timestamp
             if order.side == OrderSide.BUY:
-                if not order.reduce_only:
-                    # Buy entry (opening long position)
-                    buy_signal.loc[timestamp] = price
-                else:
-                    # Buy to close short position (exit)
-                    sell_signal.loc[timestamp] = price
+                buy_signal.loc[timestamp] = data.loc[timestamp, 'Close'] # type: ignore
             else:  # OrderSide.SELL
-                if not order.reduce_only:
-                    # Sell entry (opening short position)
-                    buy_signal.loc[timestamp] = price
-                else:
-                    # Sell to close long position (exit)
-                    sell_signal.loc[timestamp] = price
+                sell_signal.loc[timestamp] = data.loc[timestamp, 'Close'] # type: ignore
         
-        # Build addplot list with markers
-        apds = [
-            mpf.make_addplot(
-                buy_signal,
-                type="scatter",
-                marker="^",
-                markersize=120,
-                color="green",
-            ),
-            mpf.make_addplot(
-                sell_signal,
-                type="scatter",
-                marker="v",
-                markersize=120,
-                color="red",
-            ),
-        ]
+        # If no trades to plot and no data, raise an error
+        if data.empty:
+            raise ValueError("No data available to plot. Check your date range.")
+        
+        # Check if there are actual trade markers (non-NaN values)
+        has_buy_signals = not buy_signal.dropna().empty
+        has_sell_signals = not sell_signal.dropna().empty
+        
+        # Build addplot list with markers (only if we have data points)
+        apds = []
+        if has_buy_signals:
+            apds.append(
+                mpf.make_addplot(
+                    buy_signal,
+                    type="scatter",
+                    marker="^",
+                    markersize=120,
+                    color="green",
+                )
+            )
+        if has_sell_signals:
+            apds.append(
+                mpf.make_addplot(
+                    sell_signal,
+                    type="scatter",
+                    marker="v",
+                    markersize=120,
+                    color="red",
+                )
+            )
+        
+        # If no trades found in the date range, warn the user
+        if not apds:
+            import warnings
+            warnings.warn(
+                "No trades found in the specified date range. "
+                "Plotting price data without trade markers."
+            )
         
         # Generate default title if not provided
         if title is None:
@@ -282,6 +286,7 @@ class BacktestReport:
             figsize=figsize,
             style=style,
             title=title,
+            warn_too_much_data=len(data) + 5
         )
 
     def __str__(self) -> str:
