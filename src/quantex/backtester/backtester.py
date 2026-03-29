@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
-from quantex.backtester.walk_forward import WalkForwardResult
+from ..backtester.walk_forward import WalkForwardResult
 
 from ..broker import Order
 from ..strategy import Strategy
@@ -1554,7 +1554,7 @@ class SimpleBacktester:
         min_test_periods: int = 10,
         progress_bar: bool = True,
         **optimizer_kwargs: Any,
-    ) -> WalkForwardResult:
+    ) -> "WalkForwardResult":
         """
         Perform walk-forward analysis on the strategy.
         
