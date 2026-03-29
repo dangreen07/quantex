@@ -8,6 +8,8 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
+from quantex.backtester.walk_forward import WalkForwardResult
+
 from ..broker import Order
 from ..strategy import Strategy
 
@@ -1534,5 +1536,173 @@ class SimpleBacktester:
             simulations=simulations,
             mode=mode,
             seed=seed,
+            progress_bar=progress_bar,
+        )
+
+    def walk_forward_analyze(
+        self,
+        params: dict[str, Any],
+        train_periods: int,
+        test_periods: int,
+        step_periods: int | None = None,
+        constraint: Callable[[dict[str, Any]], bool] | None = None,
+        objective: str = "sharpe",
+        risk_tolerance: dict[str, float] | None = None,
+        min_train_periods: int = 30,
+        min_test_periods: int = 10,
+        progress_bar: bool = True,
+        **optimizer_kwargs: Any,
+    ) -> WalkForwardResult:
+        """
+        Perform walk-forward analysis on the strategy.
+        
+        Walk-forward analysis is a rigorous method for evaluating trading strategies
+        that simulates real-world deployment conditions. It uses rolling windows to:
+        1. Train: Optimize parameters on historical data
+        2. Test: Evaluate best parameters on unseen future data
+        
+        This method provides a convenient way to run walk-forward analysis directly
+        on the backtester instance without needing to create a separate WalkForwardAnalyzer.
+        
+        Args:
+            params (dict[str, range]): Dictionary mapping strategy attribute names
+                to iterables of candidate values. For example:
+                ```python
+                {
+                    'fast_period': [5, 10, 15, 20],
+                    'slow_period': [20, 30, 40, 50],
+                    'threshold': [0.01, 0.02, 0.05]
+                }
+                ```
+            train_periods (int): Number of periods for each training window.
+                This is the lookback window used for parameter optimization.
+            test_periods (int): Number of periods for each test window.
+                This is the forward-looking window for out-of-sample evaluation.
+            step_periods (int | None, optional): Number of periods to step forward
+                between windows. If None, uses test_periods (non-overlapping windows).
+                Defaults to None.
+            constraint (Callable[[dict[str, Any]], bool] | None, optional): Optional
+                callable that takes a parameter dict and returns True to evaluate
+                or False to skip. Useful for enforcing logical constraints.
+                Defaults to None.
+            objective (str, optional): Metric to optimize. Defaults to "sharpe".
+                Supports: "final_cash", "total_return", "sharpe", "max_drawdown", "trades".
+            risk_tolerance (dict[str, float] | None, optional): Optional maximum
+                allowed values for risk metrics. Defaults to None.
+            min_train_periods (int, optional): Minimum required training periods.
+                Defaults to 30.
+            min_test_periods (int, optional): Minimum required test periods.
+                Defaults to 10.
+            progress_bar (bool, optional): Whether to show progress bar.
+                Defaults to True.
+            **optimizer_kwargs: Additional keyword arguments passed to the
+                optimizer. Can include:
+                - workers (int): For parallel optimization
+                - n_trials (int): For Optuna optimization
+                - timeout (int): For Optuna timeout
+                - random_seed (int): For reproducibility
+                
+        Returns:
+            WalkForwardResult: Object containing:
+                - n_windows: Total number of walk-forward windows
+                - train_periods: Periods in each training window
+                - test_periods: Periods in each test window
+                - window_results: List of WalkForwardWindow objects
+                - aggregated_metrics: Aggregated statistics across windows
+                - all_windows_results_df: DataFrame with all results
+                - plot(): Visualization method for results
+                
+        Example:
+            >>> # Run walk-forward analysis with grid search
+            >>> result = bt.walk_forward_analyze(
+            ...     params={'fast': [5, 10, 20], 'slow': [20, 50, 100]},
+            ...     train_periods=252,  # 1 year training
+            ...     test_periods=63,   # 3 months testing
+            ...     objective='sharpe'
+            ... )
+            >>> print(result)
+            >>> print(f"Average OOS Sharpe: {result.aggregated_metrics['out_of_sample_sharpe_mean']:.2f}")
+            >>> result.plot()
+            
+            >>> # Run with parallel optimization
+            >>> result = bt.walk_forward_analyze(
+            ...     params={'period': range(5, 50, 5)},
+            ...     train_periods=252,
+            ...     test_periods=63,
+            ...     workers=4  # Use parallel optimization
+            ... )
+            
+            >>> # Run with Optuna optimization
+            >>> result = bt.walk_forward_analyze(
+            ...     params={'period': (5, 50)},
+            ...     train_periods=252,
+            ...     test_periods=63,
+            ...     n_trials=100  # Optuna-specific
+            ... )
+        
+        Note:
+            - Walk-forward analysis helps detect overfitting by evaluating parameter
+              stability and out-of-sample performance over multiple time windows
+            - A stability ratio (OOS/IS Sharpe) close to 1.0 indicates robust parameters
+            - Use step_periods < test_periods for overlapping windows with more samples
+        """
+        from .walk_forward import (
+            WalkForwardAnalyzer,
+            WalkForwardResult,
+        )
+        
+        # Handle step_periods - use test_periods if None
+        actual_step = test_periods if step_periods is None else step_periods
+        
+        # Determine which optimizer to use based on kwargs
+        # If workers > 1, use optimize_parallel; if n_trials provided, use optimize_optuna
+        if "n_trials" in optimizer_kwargs:
+            # Use Optuna optimizer
+            optimizer = lambda bt, params, **kw: bt.optimize_optuna(
+                param_space=params,
+                n_trials=kw.get("n_trials", 100),
+                objective=kw.get("objective", objective),
+                risk_tolerance=kw.get("risk_tolerance", risk_tolerance),
+                constraint=kw.get("constraint", constraint),
+                timeout=kw.get("timeout", None),
+                random_seed=kw.get("random_seed", None),
+                workers=kw.get("workers", None),
+                progress_bar=kw.get("progress_bar", False),
+            )
+        elif optimizer_kwargs.get("workers", 1) > 1:
+            # Use parallel optimizer
+            optimizer = lambda bt, params, **kw: bt.optimize_parallel(
+                params=params,
+                constraint=kw.get("constraint", constraint),
+                objective=kw.get("objective", objective),
+                risk_tolerance=kw.get("risk_tolerance", risk_tolerance),
+                workers=kw.get("workers", None),
+                chunksize=kw.get("chunksize", "auto"),
+            )
+        else:
+            # Use sequential optimizer
+            optimizer = lambda bt, params, **kw: bt.optimize(
+                params=params,
+                constraint=kw.get("constraint", constraint),
+                objective=kw.get("objective", objective),
+                risk_tolerance=kw.get("risk_tolerance", risk_tolerance),
+            )
+        
+        # Create analyzer and run analysis
+        analyzer = WalkForwardAnalyzer(
+            backtester=self,
+            train_periods=train_periods,
+            test_periods=test_periods,
+            min_train_periods=min_train_periods,
+            min_test_periods=min_test_periods,
+            selection_criterion=objective,
+        )
+        
+        return analyzer.analyze(
+            optimizer=optimizer,
+            params=params,
+            constraint=constraint,
+            objective=objective,
+            risk_tolerance=risk_tolerance,
             progress_bar=progress_bar,
         )

@@ -7,11 +7,16 @@ optimization uses rolling windows to test parameter stability over time.
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Callable, Protocol
+from datetime import timedelta
+from typing import Any, Callable, Protocol, Union
 
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
+
+
+# Type alias for period specification (int or timedelta)
+PeriodSpec = Union[int, timedelta, pd.Timedelta]
 
 
 @dataclass
@@ -27,6 +32,10 @@ class WalkForwardWindow:
         test_end (int): Ending index for test data.
         train_periods (int): Number of periods in training.
         test_periods (int): Number of periods in testing.
+        train_periods_spec (PeriodSpec): Original specification for train periods
+            (can be int or timedelta).
+        test_periods_spec (PeriodSpec): Original specification for test periods
+            (can be int or timedelta).
         best_params (dict): Best parameters found during training.
         train_metrics (dict): Metrics computed on training data.
         test_metrics (dict): Metrics computed on test (out-of-sample) data.
@@ -40,9 +49,11 @@ class WalkForwardWindow:
     test_end: int
     train_periods: int
     test_periods: int
-    best_params: dict
-    train_metrics: dict
-    test_metrics: dict
+    train_periods_spec: PeriodSpec | None = None
+    test_periods_spec: PeriodSpec | None = None
+    best_params: dict = field(default_factory=dict)
+    train_metrics: dict = field(default_factory=dict)
+    test_metrics: dict = field(default_factory=dict)
     train_report: Any = None
     test_report: Any = None
 
@@ -57,8 +68,12 @@ class WalkForwardResult:
     
     Attributes:
         n_windows (int): Total number of walk-forward windows.
-        train_periods (int): Number of periods in each training window.
-        test_periods (int): Number of periods in each test window.
+        train_periods (int): Number of periods in each training window (computed value).
+        test_periods (int): Number of periods in each test window (computed value).
+        train_periods_spec (PeriodSpec): Original specification for train periods
+            (can be int or timedelta).
+        test_periods_spec (PeriodSpec): Original specification for test periods
+            (can be int or timedelta).
         window_results (list[WalkForwardWindow]): Results for each window.
         aggregated_metrics (dict): Aggregated statistics across all windows.
         all_windows_results_df (pd.DataFrame): DataFrame with results from all windows.
@@ -66,6 +81,8 @@ class WalkForwardResult:
     n_windows: int
     train_periods: int
     test_periods: int
+    train_periods_spec: PeriodSpec | None = None
+    test_periods_spec: PeriodSpec | None = None
     window_results: list[WalkForwardWindow] = field(default_factory=list)
     aggregated_metrics: dict = field(default_factory=dict)
     all_windows_results_df: pd.DataFrame = field(default_factory=pd.DataFrame)
@@ -269,7 +286,6 @@ class OptimizerProtocol(Protocol):
     def __call__(self, *args: Any, **kwargs: Any) -> Any: ...
 
 
-@dataclass
 class WalkForwardAnalyzer:
     """
     Analyzer for walk-forward optimization.
@@ -286,10 +302,14 @@ class WalkForwardAnalyzer:
     
     Attributes:
         backtester (SimpleBacktester): The backtester instance to use.
-        train_periods (int): Number of periods for each training window.
-        test_periods (int): Number of periods for each test window.
-        step_periods (int): Number of periods to step forward between windows.
-            If None, uses test_periods (non-overlapping windows).
+        train_periods (PeriodSpec): Number of periods or timedelta for each 
+            training window. Can be an int (number of periods) or a timedelta
+            (e.g., pd.Timedelta('252 days') or timedelta(days=365)).
+        test_periods (PeriodSpec): Number of periods or timedelta for each 
+            test window. Can be an int or timedelta.
+        step_periods (PeriodSpec): Number of periods or timedelta to step 
+            forward between windows. If None, uses test_periods 
+            (non-overlapping windows).
         min_train_periods (int): Minimum required training periods.
         min_test_periods (int): Minimum required test periods.
         selection_criterion (str): Metric to use for selecting best parameters.
@@ -297,13 +317,22 @@ class WalkForwardAnalyzer:
     Example:
         >>> from quantex.backtester.walk_forward import WalkForwardAnalyzer
         >>> from quantex import SimpleBacktester
+        >>> import pandas as pd
         >>> 
-        >>> # Create analyzer with grid search optimizer
+        >>> # Create analyzer with grid search optimizer (using periods)
         >>> analyzer = WalkForwardAnalyzer(
         ...     backtester=bt,
-        ...     train_periods=252,  # 1 year training
-        ...     test_periods=63,   # 3 months testing
-        ...     step_periods=63    # Move forward 3 months each window
+        ...     train_periods=252,  # 1 year training (252 trading days)
+        ...     test_periods=63,    # 3 months testing
+        ...     step_periods=63     # Move forward 3 months each window
+        ... )
+        >>> 
+        >>> # Or using timedelta (data frequency is inferred from the data)
+        >>> analyzer = WalkForwardAnalyzer(
+        ...     backtester=bt,
+        ...     train_periods=pd.Timedelta('252 days'),  # 1 year training
+        ...     test_periods=pd.Timedelta('90 days'),   # 3 months testing
+        ...     step_periods=pd.Timedelta('90 days')    # Move forward 3 months
         ... )
         >>> 
         >>> # Run with grid search
@@ -316,37 +345,28 @@ class WalkForwardAnalyzer:
         >>> print(result)
         >>> print(f"Average out-of-sample Sharpe: {result.aggregated_metrics['out_of_sample_sharpe_mean']:.2f}")
     """
-    backtester: Any
-    train_periods: int
-    test_periods: int
-    step_periods: int = 0  # Will be set to test_periods in __post_init__ if 0
-    min_train_periods: int = 30
-    min_test_periods: int = 10
-    selection_criterion: str = "sharpe"
 
-    def __post_init__(self):
-        """Validate and set default values."""
-        # Handle default step_periods
-        if self.step_periods <= 0:
-            self.step_periods = self.test_periods
-        
-        if self.train_periods < self.min_train_periods:
-            raise ValueError(
-                f"train_periods must be at least {self.min_train_periods}, "
-                f"got {self.train_periods}"
-            )
-        
-        if self.test_periods < self.min_test_periods:
-            raise ValueError(
-                f"test_periods must be at least {self.min_test_periods}, "
-                f"got {self.test_periods}"
-            )
-        
-        if self.step_periods <= 0:
-            raise ValueError("step_periods must be positive")
-        
-        # Get data length from the strategy's data source
-        positions = self.backtester.strategy.positions
+    def __init__(
+        self,
+        backtester: Any,
+        train_periods: PeriodSpec,
+        test_periods: PeriodSpec,
+        step_periods: PeriodSpec | None = None,
+        min_train_periods: int = 30,
+        min_test_periods: int = 10,
+        selection_criterion: str = "sharpe",
+    ):
+        """Initialize the WalkForwardAnalyzer."""
+        self.backtester = backtester
+        self._train_periods_spec = train_periods
+        self._test_periods_spec = test_periods
+        self._step_periods_spec = step_periods
+        self.min_train_periods = min_train_periods
+        self.min_test_periods = min_test_periods
+        self.selection_criterion = selection_criterion
+
+        # Get data source for frequency information
+        positions = backtester.strategy.positions
         if not positions:
             raise ValueError(
                 "Strategy must have at least one data source registered. "
@@ -354,32 +374,139 @@ class WalkForwardAnalyzer:
             )
         source = positions[next(iter(positions))].source
         self.data_length = len(source.data)
+        self.data_index = source.data.index
+
+        # Convert timedelta specifications to period counts
+        self._train_periods_int = self._resolve_periods(train_periods)
+        self._test_periods_int = self._resolve_periods(test_periods)
+
+        if step_periods is None:
+            self._step_periods_int = self._test_periods_int
+        else:
+            self._step_periods_int = self._resolve_periods(step_periods)
+
+        # Validate period counts
+        if self._train_periods_int < self.min_train_periods:
+            raise ValueError(
+                f"train_periods ({train_periods}) resolves to "
+                f"{self._train_periods_int} periods, which is less than "
+                f"the minimum of {self.min_train_periods}"
+            )
+
+        if self._test_periods_int < self.min_test_periods:
+            raise ValueError(
+                f"test_periods ({test_periods}) resolves to "
+                f"{self._test_periods_int} periods, which is less than "
+                f"the minimum of {self.min_test_periods}"
+            )
+
+        if self._step_periods_int <= 0:
+            raise ValueError(
+                f"step_periods ({step_periods}) resolves to "
+                f"{self._step_periods_int}, which must be positive"
+            )
+
+    def _resolve_periods(self, value: PeriodSpec) -> int:
+        """
+        Convert a period specification to number of periods.
+        
+        Args:
+            value: Either an int (number of periods) or a timedelta.
+        
+        Returns:
+            int: Number of periods.
+        """
+        if isinstance(value, (timedelta, pd.Timedelta)):
+            td = pd.Timedelta(value)
+            # Calculate number of periods based on data frequency
+            if len(self.data_index) < 2:
+                raise ValueError(
+                    "Cannot convert timedelta to periods: "
+                    "data source has fewer than 2 data points"
+                )
+            
+            # Determine the frequency of the data
+            # Compute from the first two points (most reliable method)
+            freq_delta = self.data_index[1] - self.data_index[0]
+            freq_delta = pd.Timedelta(freq_delta)
+            
+            if freq_delta.total_seconds() <= 0:
+                raise ValueError(
+                    "Cannot convert timedelta to periods: "
+                    "data frequency could not be determined"
+                )
+            
+            # Calculate number of periods covered by the timedelta
+            periods = int(round(td / freq_delta))
+            
+            if periods <= 0:
+                raise ValueError(
+                    f"timedelta {td} is less than one data period "
+                    f"(frequency: {freq_delta})"
+                )
+            
+            return periods
+        
+        # It's already an int
+        return int(value)
+
+    @property
+    def train_periods_spec(self) -> PeriodSpec:
+        """Original train_periods specification (int or timedelta)."""
+        return self._train_periods_spec
+
+    @property
+    def test_periods_spec(self) -> PeriodSpec:
+        """Original test_periods specification (int or timedelta)."""
+        return self._test_periods_spec
+
+    @property
+    def step_periods_spec(self) -> PeriodSpec | None:
+        """Original step_periods specification (int or timedelta)."""
+        return self._step_periods_spec
+
+    @property
+    def train_periods(self) -> int:
+        """Resolved train_periods as number of periods (int)."""
+        return self._train_periods_int
+
+    @property
+    def test_periods(self) -> int:
+        """Resolved test_periods as number of periods (int)."""
+        return self._test_periods_int
+
+    @property
+    def step_periods(self) -> int:
+        """Resolved step_periods as number of periods (int)."""
+        return self._step_periods_int
 
     def _create_window_splits(self) -> list[tuple[int, int, int, int]]:
         """
         Create the train/test splits for all walk-forward windows.
-        
+
         Returns:
             List of tuples: (train_start, train_end, test_start, test_end)
         """
         splits = []
         train_start = 0
-        step = self.step_periods  # Already validated to be non-None in __post_init__
-        
+        train_periods = self._train_periods_int
+        test_periods = self._test_periods_int
+        step = self._step_periods_int
+
         while True:
-            train_end = train_start + self.train_periods
+            train_end = train_start + train_periods
             test_start = train_end
-            test_end = test_start + self.test_periods
-            
+            test_end = test_start + test_periods
+
             # Check if we have enough data for test period
             if test_end > self.data_length:
                 break
-            
+
             splits.append((train_start, train_end, test_start, test_end))
-            
+
             # Move forward
             train_start += step
-        
+
         return splits
 
     def _slice_strategy_for_window(
@@ -525,8 +652,8 @@ class WalkForwardAnalyzer:
         if n_windows == 0:
             raise ValueError(
                 f"Data length ({self.data_length}) is too short for the configured "
-                f"train_periods ({self.train_periods}) and test_periods ({self.test_periods}). "
-                f"Need at least {self.train_periods + self.test_periods} periods."
+                f"train_periods ({self._train_periods_int}) and test_periods ({self._test_periods_int}). "
+                f"Need at least {self._train_periods_int + self._test_periods_int} periods."
             )
         
         window_results: list[WalkForwardWindow] = []
@@ -608,6 +735,8 @@ class WalkForwardAnalyzer:
                 test_end=test_end,
                 train_periods=train_end - train_start,
                 test_periods=test_end - test_start,
+                train_periods_spec=self._train_periods_spec,
+                test_periods_spec=self._test_periods_spec,
                 best_params=best_params,
                 train_metrics=train_metrics,
                 test_metrics=test_metrics,
@@ -637,8 +766,10 @@ class WalkForwardAnalyzer:
         
         return WalkForwardResult(
             n_windows=n_windows,
-            train_periods=self.train_periods,
-            test_periods=self.test_periods,
+            train_periods=self._train_periods_int,
+            test_periods=self._test_periods_int,
+            train_periods_spec=self._train_periods_spec,
+            test_periods_spec=self._test_periods_spec,
             window_results=window_results,
             aggregated_metrics=aggregated,
             all_windows_results_df=results_df,
@@ -713,9 +844,9 @@ def walk_forward_analyze(
     backtester: Any,
     optimizer: OptimizerProtocol,
     params: dict[str, Any],
-    train_periods: int,
-    test_periods: int,
-    step_periods: int | None = None,
+    train_periods: PeriodSpec,
+    test_periods: PeriodSpec,
+    step_periods: PeriodSpec | None = None,
     constraint: Callable[[dict], bool] | None = None,
     objective: str = "sharpe",
     risk_tolerance: dict[str, float] | None = None,
@@ -734,10 +865,12 @@ def walk_forward_analyze(
         backtester (SimpleBacktester): The backtester instance to use.
         optimizer (OptimizerProtocol): Optimizer function to use.
         params (dict[str, Any]): Parameter space for optimization.
-        train_periods (int): Number of periods for each training window.
-        test_periods (int): Number of periods for each test window.
-        step_periods (int | None, optional): Periods to step between windows.
-            If None, uses test_periods. Defaults to None.
+        train_periods (PeriodSpec): Number of periods or timedelta for each 
+            training window. Can be an int or timedelta.
+        test_periods (PeriodSpec): Number of periods or timedelta for each 
+            test window. Can be an int or timedelta.
+        step_periods (PeriodSpec | None, optional): Periods or timedelta to 
+            step between windows. If None, uses test_periods. Defaults to None.
         constraint (Callable[[dict], bool] | None, optional): Constraint function.
         objective (str, optional): Metric to optimize. Defaults to "sharpe".
         risk_tolerance (dict[str, float] | None, optional): Risk tolerance.
@@ -752,6 +885,7 @@ def walk_forward_analyze(
         WalkForwardResult: Walk-forward analysis results.
     
     Example:
+        Using periods:
         >>> from quantex.backtester.walk_forward import walk_forward_analyze
         >>> result = walk_forward_analyze(
         ...     backtester=bt,
@@ -761,16 +895,25 @@ def walk_forward_analyze(
         ...     test_periods=63,
         ...     objective='sharpe'
         ... )
+        
+        Using timedelta:
+        >>> import pandas as pd
+        >>> result = walk_forward_analyze(
+        ...     backtester=bt,
+        ...     optimizer=lambda bt, params: bt.optimize(params),
+        ...     params={'fast': [5, 10, 20], 'slow': [20, 50, 100]},
+        ...     train_periods=pd.Timedelta('365 days'),
+        ...     test_periods=pd.Timedelta('90 days'),
+        ...     objective='sharpe'
+        ... )
+        
         >>> print(f"Average OOS Sharpe: {result.aggregated_metrics['out_of_sample_sharpe_mean']:.2f}")
     """
-    # Handle step_periods - use test_periods if None
-    actual_step = test_periods if step_periods is None else step_periods
-    
     analyzer = WalkForwardAnalyzer(
         backtester=backtester,
         train_periods=train_periods,
         test_periods=test_periods,
-        step_periods=actual_step,
+        step_periods=step_periods,
         min_train_periods=min_train_periods,
         min_test_periods=min_test_periods,
         selection_criterion=objective,

@@ -94,7 +94,7 @@ class TestWalkForwardAnalyzer:
 
     def test_analyzer_validates_train_periods(self, large_backtester):
         """Analyzer should reject train_periods below minimum."""
-        with pytest.raises(ValueError, match="train_periods must be at least"):
+        with pytest.raises(ValueError, match="resolves to.*periods.*less than"):
             WalkForwardAnalyzer(
                 backtester=large_backtester,
                 train_periods=5,  # Below minimum of 30
@@ -103,7 +103,7 @@ class TestWalkForwardAnalyzer:
 
     def test_analyzer_validates_test_periods(self, large_backtester):
         """Analyzer should reject test_periods below minimum."""
-        with pytest.raises(ValueError, match="test_periods must be at least"):
+        with pytest.raises(ValueError, match="resolves to.*periods.*less than"):
             WalkForwardAnalyzer(
                 backtester=large_backtester,
                 train_periods=30,
@@ -444,6 +444,123 @@ class TestWalkForwardAnalyzerClass:
         )
         
         assert isinstance(result, WalkForwardResult)
+
+
+class TestWalkForwardWithTimedelta:
+    """Tests for timedelta support in walk-forward analysis."""
+
+    def test_timedelta_train_periods(self, ohlcv_data_large):
+        """Analyzer should accept timedelta for train_periods."""
+        datasource = DataSource(ohlcv_data_large)
+        strat = IndicatorResetStrategy()
+        strat.add_data(datasource, "EURUSD")
+        bt = SimpleBacktester(strat)
+        
+        # Using pandas Timedelta
+        analyzer = WalkForwardAnalyzer(
+            backtester=bt,
+            train_periods=pd.Timedelta('30 days'),  # Should resolve to ~30 periods for daily data
+            test_periods=10,
+        )
+        
+        assert analyzer.train_periods_spec == pd.Timedelta('30 days')
+        assert analyzer.train_periods == 30
+
+    def test_timedelta_test_periods(self, ohlcv_data_large):
+        """Analyzer should accept timedelta for test_periods."""
+        datasource = DataSource(ohlcv_data_large)
+        strat = IndicatorResetStrategy()
+        strat.add_data(datasource, "EURUSD")
+        bt = SimpleBacktester(strat)
+        
+        # Using pandas Timedelta
+        analyzer = WalkForwardAnalyzer(
+            backtester=bt,
+            train_periods=30,
+            test_periods=pd.Timedelta('10 days'),  # Should resolve to ~10 periods
+        )
+        
+        assert analyzer.test_periods_spec == pd.Timedelta('10 days')
+        assert analyzer.test_periods == 10
+
+    def test_timedelta_all_periods(self, ohlcv_data_large):
+        """Analyzer should accept timedelta for all period parameters."""
+        datasource = DataSource(ohlcv_data_large)
+        strat = IndicatorResetStrategy()
+        strat.add_data(datasource, "EURUSD")
+        bt = SimpleBacktester(strat)
+        
+        analyzer = WalkForwardAnalyzer(
+            backtester=bt,
+            train_periods=pd.Timedelta('30 days'),
+            test_periods=pd.Timedelta('10 days'),
+            step_periods=pd.Timedelta('5 days'),
+        )
+        
+        assert isinstance(analyzer.train_periods_spec, pd.Timedelta)
+        assert isinstance(analyzer.test_periods_spec, pd.Timedelta)
+        assert isinstance(analyzer.step_periods_spec, pd.Timedelta)
+        assert analyzer.train_periods == 30
+        assert analyzer.test_periods == 10
+        assert analyzer.step_periods == 5
+
+    def test_timedelta_python_timedelta(self, ohlcv_data_large):
+        """Analyzer should accept Python's timedelta."""
+        from datetime import timedelta as python_timedelta
+        
+        datasource = DataSource(ohlcv_data_large)
+        strat = IndicatorResetStrategy()
+        strat.add_data(datasource, "EURUSD")
+        bt = SimpleBacktester(strat)
+        
+        analyzer = WalkForwardAnalyzer(
+            backtester=bt,
+            train_periods=python_timedelta(days=30),
+            test_periods=python_timedelta(days=10),
+        )
+        
+        assert analyzer.train_periods == 30
+        assert analyzer.test_periods == 10
+
+    def test_walk_forward_analyze_with_timedelta(self, ohlcv_data_large):
+        """walk_forward_analyze function should accept timedelta."""
+        datasource = DataSource(ohlcv_data_large)
+        strat = ParametrizedHoldPeriodStrategy()
+        strat.add_data(datasource, "EURUSD")
+        bt = SimpleBacktester(strat)
+        
+        result = walk_forward_analyze(
+            backtester=bt,
+            optimizer=lambda bt, params, **kwargs: bt.optimize(params, **kwargs),
+            params={"hold_period": [1, 2]},
+            train_periods=pd.Timedelta('30 days'),
+            test_periods=pd.Timedelta('10 days'),
+            progress_bar=False,
+        )
+        
+        assert isinstance(result, WalkForwardResult)
+        assert result.n_windows >= 1
+        assert result.train_periods == 30
+        assert result.test_periods == 10
+
+    def test_result_contains_timedelta_specs(self, ohlcv_data_large):
+        """WalkForwardResult should contain timedelta specs when used."""
+        datasource = DataSource(ohlcv_data_large)
+        strat = ParametrizedHoldPeriodStrategy()
+        strat.add_data(datasource, "EURUSD")
+        bt = SimpleBacktester(strat)
+        
+        result = walk_forward_analyze(
+            backtester=bt,
+            optimizer=lambda bt, params, **kwargs: bt.optimize(params, **kwargs),
+            params={"hold_period": [1, 2]},
+            train_periods=pd.Timedelta('30 days'),
+            test_periods=pd.Timedelta('10 days'),
+            progress_bar=False,
+        )
+        
+        assert isinstance(result.train_periods_spec, pd.Timedelta)
+        assert isinstance(result.test_periods_spec, pd.Timedelta)
 
 
 class TestWalkForwardStringRepresentation:
