@@ -44,6 +44,9 @@ pytest-xdist = "^3.8.0"
 matplotlib = "^3.10.3"
 ipykernel = "^7.2.0"
 
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
 build-backend = "poetry.core.masonry.api"
