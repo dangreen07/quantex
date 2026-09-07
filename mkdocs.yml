@@ -23,20 +23,6 @@ theme:
         name: Switch to light mode
 nav:
   - Home: index.md
-  - Guides:
-      - Strategies: usage/strategy.md
-      - Data Sources: usage/data-sources.md
-      - Backtesting Engine: usage/backtesting.md
-      - Execution Simulator: usage/execution.md
-      - Technical Indicators: usage/indicators.md
-      - Parameter Optimizer: usage/optimizer.md
-  - API Reference:
-      - Backtester: reference/backtester.md
-      - Broker: reference/broker.md
-      - Datasource: reference/datasource.md
-      - Enums: reference/enums.md
-      - Helpers: reference/helpers.md
-      - Strategy: reference/strategy.md
 plugins:
   - search
   - to-pdf
