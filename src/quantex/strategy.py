@@ -7,17 +7,17 @@ import numpy as np
 
 class Indicator:
     def __init__(self, data: np.ndarray):
-        self.__data__ = data
-        self.__current__ = 1
+        self.__data = data
+        self._current = 1
 
     def __getitem__(self, key):
-        return self.__data__[: self.__current__][key]
+        return self.__data[: self._current][key]
 
     def __str__(self):
-        return str(self.__data__[: self.__current__])
+        return str(self.__data[: self._current])
 
     def __len__(self):
-        return self.__current__
+        return self._current
 
 
 class Strategy:

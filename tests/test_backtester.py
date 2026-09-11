@@ -8,3 +8,5 @@ def test_backtester():
     source = YahooDataSource("NVDA", start="2022-01-01", end="2023-12-31")
     bt.add_data(source, "NVDA")
     bt.run()
+    print(f"Total Return: {bt.result.total_return():.2%}")
+    print(f"Total Trades: {bt.result.total_trades:,}")

@@ -4,8 +4,9 @@ import talib
 
 
 class SMACrossover(Strategy):
-    fast_period = 10
-    slow_period = 30
+    fast_period = 5
+    slow_period = 20
+    trade_size = 0.1
 
     def init(self):
         self.fast_ma = self.Indicator(
@@ -16,8 +17,20 @@ class SMACrossover(Strategy):
         )
 
     def next(self):
-        if self.fast_ma[-1] > self.slow_ma[-1] and self.fast_ma[-2] < self.slow_ma[-2]:
-            print("BUY")
+        if (
+            self.fast_ma[-1] > self.slow_ma[-1]
+            and self.fast_ma[-2] < self.slow_ma[-2]
+            and (self.broker.is_closed() or self.broker.is_short())
+        ):
+            amount = self.broker.equity() * self.trade_size / self.data.Close[-1]
+            self.broker.buy(amount=amount)
+        elif (
+            self.fast_ma[-1] < self.slow_ma[-1]
+            and self.fast_ma[-2] > self.slow_ma[-2]
+            and (self.broker.is_closed() or self.broker.is_long())
+        ):
+            amount = self.broker.equity() * self.trade_size / self.data.Close[-1]
+            self.broker.sell(amount=amount)
 
 
 def test_strategy():
@@ -26,5 +39,5 @@ def test_strategy():
     strat.add_data(source)
     strat.init()
     assert len(strat.fast_ma) == 1
-    strat.fast_ma.__current__ = 15
+    strat.fast_ma._current = 15
     assert len(strat.fast_ma) == 15

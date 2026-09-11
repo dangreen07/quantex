@@ -1,7 +1,6 @@
 from dataclasses import dataclass
 import pandas as pd
 from enum import Enum
-
 from quantex.datasource import PricingData
 
 
@@ -36,14 +35,14 @@ def execute_condition(order: Order, price: float):
     if order.type == OrderType.MARKET:
         return True
     elif order.type == OrderType.LIMIT and order.price:
-        if order.direction == Direction.BUY and order.price <= price:
+        if order.direction == Direction.BUY and price <= order.price:
             return True
-        elif order.direction == Direction.SELL and order.price >= price:
+        elif order.direction == Direction.SELL and price >= order.price:
             return True
     elif order.type == OrderType.STOP and order.price:
-        if order.direction == Direction.BUY and order.price >= price:
+        if order.direction == Direction.BUY and price >= order.price:
             return True
-        elif order.direction == Direction.SELL and order.price <= price:
+        elif order.direction == Direction.SELL and price <= order.price:
             return True
     return False
 
@@ -55,6 +54,7 @@ class Broker:
 
     def __init__(self, context: PricingData, cash: float = 10_000):
         self.cash = cash
+        self.total_trades = 0
         self.orderQueue = {}
         self.processedOrders = {}
         self.openPositions = {}
@@ -62,6 +62,8 @@ class Broker:
         self.orderQueue = {}
         for name in self.__context__.datas.keys():
             self.orderQueue[name] = []
+            self.processedOrders[name] = []
+            self.openPositions[name] = []
 
     def __process_order__(self, order: Order, name: str):
         """
@@ -77,16 +79,26 @@ class Broker:
                 total = order.amount * price
                 amount = order.amount
                 for i in range(len(self.openPositions[name])):
-                    amount = self.openPositions[name][i].amount - amount
-                    self.openPositions[name][i].amount = max(amount, 0)
-                    if amount <= 0:
+                    open_amount = self.openPositions[name][i].amount
+                    closed_amount = min(open_amount, amount)
+                    self.openPositions[name][i].amount -= closed_amount
+                    amount -= closed_amount
+                    if amount == 0:
                         break
-                self.openPositions[name] = [
-                    i for i in self.openPositions[name] if i.amount > 0
-                ]
-                if len(self.openPositions[name]) == 0 and amount > 0:
-                    self.cash += (order.amount - amount) * price
-                    self.openPositions[name].append(
+                positions = []
+                for openOrder in self.openPositions[name]:
+                    if openOrder.amount > 0:
+                        positions.append(
+                            openOrder
+                        )  ## This order has not been fully executed
+                    else:
+                        self.processedOrders[name].append(
+                            openOrder
+                        )  ## This order has been fully executed
+                if len(positions) == 0:
+                    self.total_trades += 1
+                if len(positions) == 0 and amount > 0:
+                    positions.append(
                         Order(
                             order.timestamp,
                             order.type,
@@ -95,6 +107,11 @@ class Broker:
                             order.price,
                         )
                     )
+                else:
+                    self.processedOrders[name].append(
+                        order
+                    )  ## This order has been fully executed
+                self.openPositions[name] = positions
                 if order.direction == Direction.BUY:
                     self.cash -= total
                 else:
@@ -113,6 +130,23 @@ class Broker:
         for name in self.orderQueue.keys():
             for order in self.orderQueue[name]:
                 self.__process_order__(order, name)
+            self.orderQueue[name] = []
+
+    def equity(self) -> float:
+        """
+        Get the current equity at the current time.
+        Returns:
+            float: The current equity.
+        """
+        equity = self.cash
+        for name in self.orderQueue.keys():
+            for order in self.openPositions[name]:
+                prices = self.__context__.datas[name].Close
+                if order.direction == Direction.BUY:
+                    equity += order.amount * prices[-1]
+                else:
+                    equity -= order.amount * prices[-1]
+        return equity
 
     def buy(
         self,
@@ -221,3 +255,24 @@ class Broker:
                 raise ValueError(
                     "Take profit price must be less than current price for SELL order"
                 )
+
+    def is_long(self, name: str | None = None) -> bool:
+        if name is None:
+            name = list(self.__context__.datas.keys())[0]
+        if len(self.openPositions[name]) == 0:
+            return False
+        return self.openPositions[name][0].direction == Direction.BUY
+
+    def is_short(self, name: str | None = None) -> bool:
+        if name is None:
+            name = list(self.__context__.datas.keys())[0]
+        if len(self.openPositions[name]) == 0:
+            return False
+        return self.openPositions[name][0].direction == Direction.SELL
+
+    def is_closed(self, name: str | None = None) -> bool:
+        if name is None:
+            name = list(self.__context__.datas.keys())[0]
+        if len(self.openPositions[name]) == 0:
+            return True
+        return False
