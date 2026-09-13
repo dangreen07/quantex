@@ -1,15 +1,13 @@
+from quantex.commission import Commission
 from quantex.datasource import DataSource, PricingData
 from quantex.strategy import Indicator, Strategy
+from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
 
+@dataclass
 class Result:
-    equity: np.ndarray
-    starting_cash: float
-    run_strategy: Strategy
-    total_trades: int
-
     def __init__(
         self,
         equity: np.ndarray,
@@ -70,15 +68,20 @@ class Result:
 
 
 class Backtester:
-    strategy: type[Strategy]
-    data: PricingData
-
-    def __init__(self, strategy: type[Strategy], cash: float = 10_000):
+    def __init__(
+        self,
+        strategy: type[Strategy],
+        commission: Commission | None = None,
+        cash: float = 10_000,
+    ):
         self.strategy = strategy
         self.data = PricingData()
         self.cash = cash
+        self.commission = commission or Commission()
 
     def add_data(self, data: DataSource, name: str | None = None):
+        if name is None:
+            name = data.name
         self.data.add_data(data, name)
 
     def run(self):

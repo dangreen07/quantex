@@ -1,6 +1,8 @@
 from quantex.backtester import Backtester
-from quantex.datasource import YahooDataSource
+from quantex.datasource import DataSource, YahooDataSource
 from quantex.strategy import Strategy
+import pandas as pd
+import pytest
 import talib
 
 
@@ -44,18 +46,42 @@ class SMACrossover(Strategy):
             )
 
 
+class BuyAndHold(Strategy):
+    def init(self):
+        pass
+
+    def next(self):
+        if self.broker.is_closed():
+            self.broker.buy(amount=50)
+
+
 def test_backtester():
     bt = Backtester(SMACrossover)
     source = YahooDataSource("NVDA", start="2020-01-01", end="2025-12-31")
     bt.add_data(source, "NVDA")
     result = bt.run()
-    print(f"Total Return: {result.total_return:.2%}")
-    print(f"Total Trades: {result.total_trades:,}")
-    print(f"Sharpe Ratio: {result.sharpe_ratio():.2f}")
-    print(f"Annualized Return: {result.annualized_return:.2%}")
-    drawdown_dollars, drawdown_percent = result.max_drawdown
-    print(f"Max Drawdown: $ {drawdown_dollars:,.2f} ({drawdown_percent:.2%})")
-    # plt.plot(bt.result.run_strategy.data.Timestamp, bt.result.equity)
-    # plt.gcf().autofmt_xdate()
-    # plt.tight_layout()
-    # plt.show()
+    assert result.total_return == pytest.approx(0.6971, rel=1e-2)
+    assert result.total_trades == 102
+    assert result.sharpe_ratio() == pytest.approx(0.47, rel=1e-2)
+    assert result.annualized_return == pytest.approx(0.0923, rel=1e-2)
+    assert result.max_drawdown == pytest.approx((523.98, 0.0524), rel=1e-2)
+
+
+def test_basic_backtester():
+    bt = Backtester(BuyAndHold)
+    source = DataSource(
+        "STOCK",
+        pd.DataFrame(
+            data={
+                "Open": [10, 15, 20, 25],
+                "High": [15, 20, 25, 30],
+                "Low": [5, 10, 15, 20],
+                "Close": [15, 20, 25, 30],
+                "Volume": [100, 100, 100, 100],
+            }
+        ),
+    )
+    bt.add_data(source)
+    expected_return = 50 * (30 - 20) / 10_000
+    result = bt.run()
+    assert result.total_return == pytest.approx(expected_return)

@@ -95,7 +95,7 @@ class PricingData:
         name: str | None = None,
     ) -> None:
         if name is None:
-            name = str(len(self.datas))
+            name = data.name
 
         self.datas[name] = data
         self.index = self.index.union(data.Timestamp)  # type: ignore
