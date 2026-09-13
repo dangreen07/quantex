@@ -17,20 +17,18 @@ class Direction(Enum):
 
 @dataclass
 class Order:
+    id: int
     timestamp: pd.Timestamp
     type: OrderType
     direction: Direction
     amount: float
     price: float | None
+    parentId: int | None
 
 
 def execute_condition(order: Order, price: float):
     """
     Figures out if an order should execute and executes it based on it.
-
-    Parameters:
-        - order: The Order object
-        - price: Current market price
     """
     if order.type == OrderType.MARKET:
         return True
@@ -51,6 +49,7 @@ class Broker:
     orderQueue: dict[str, list[Order]]  ## Orders to be processed
     processedOrders: dict[str, list[Order]]  ## Orders that have been processed
     openPositions: dict[str, list[Order]]  ## Orders that are currently open
+    __orderId__: int
 
     def __init__(self, context: PricingData, cash: float = 10_000):
         self.cash = cash
@@ -59,6 +58,7 @@ class Broker:
         self.processedOrders = {}
         self.openPositions = {}
         self.__context__ = context
+        self.__orderId__ = 1
         self.orderQueue = {}
         for name in self.__context__.datas.keys():
             self.orderQueue[name] = []
@@ -84,6 +84,17 @@ class Broker:
                     self.openPositions[name][i].amount -= closed_amount
                     amount -= closed_amount
                     if amount == 0:
+                        if order.parentId is not None:
+                            idx = 0
+                            for i in range(len(self.orderQueue[name])):
+                                if self.orderQueue[name][i].id == order.id:
+                                    continue
+                                elif (
+                                    self.orderQueue[name][i].parentId == order.parentId
+                                ):
+                                    idx = i
+                                    break
+                            self.orderQueue[name].pop(idx)
                         break
                 positions = []
                 for openOrder in self.openPositions[name]:
@@ -100,11 +111,13 @@ class Broker:
                 if len(positions) == 0 and amount > 0:
                     positions.append(
                         Order(
+                            order.id,
                             order.timestamp,
                             order.type,
                             order.direction,
                             amount,
                             order.price,
+                            order.parentId,
                         )
                     )
                 else:
@@ -116,6 +129,7 @@ class Broker:
                     self.cash -= total
                 else:
                     self.cash += total
+                return True
         else:
             price: float = self.__context__.datas[name].Close[-1]
             if execute_condition(order, price):
@@ -125,12 +139,16 @@ class Broker:
                     self.cash -= total
                 else:
                     self.cash += total
+                return True
+        return False
 
     def __process_orders__(self):
         for name in self.orderQueue.keys():
+            queue = []
             for order in self.orderQueue[name]:
-                self.__process_order__(order, name)
-            self.orderQueue[name] = []
+                if not self.__process_order__(order, name):
+                    queue.append(order)
+            self.orderQueue[name] = queue
 
     def equity(self) -> float:
         """
@@ -159,26 +177,47 @@ class Broker:
         if name is None:
             name = list(self.__context__.datas.keys())[0]
         data = self.__context__.datas[name]
+        parentId = self.__orderId__
+        self.__orderId__ += 1
         if limit is not None:
             self.orderQueue[name].append(
-                Order(data.Timestamp[-1], OrderType.LIMIT, Direction.BUY, amount, limit)
+                Order(
+                    parentId,
+                    data.Timestamp[-1],
+                    OrderType.LIMIT,
+                    Direction.BUY,
+                    amount,
+                    limit,
+                    None,
+                )
             )
         else:
             self.orderQueue[name].append(
-                Order(data.Timestamp[-1], OrderType.MARKET, Direction.BUY, amount, None)
+                Order(
+                    parentId,
+                    data.Timestamp[-1],
+                    OrderType.MARKET,
+                    Direction.BUY,
+                    amount,
+                    None,
+                    None,
+                )
             )
         if stop_loss is not None:
             price = limit or data.Close[-1]
             if stop_loss < price:
                 self.orderQueue[name].append(
                     Order(
+                        self.__orderId__,
                         data.Timestamp[-1],
                         OrderType.STOP,
                         Direction.SELL,
                         amount,
                         stop_loss,
+                        parentId,
                     )
                 )
+                self.__orderId__ += 1
             else:
                 raise ValueError(
                     "Stop loss price must be less than current price for BUY order"
@@ -188,13 +227,16 @@ class Broker:
             if take_profit > price:
                 self.orderQueue[name].append(
                     Order(
+                        self.__orderId__,
                         data.Timestamp[-1],
                         OrderType.STOP,
                         Direction.SELL,
                         amount,
                         take_profit,
+                        parentId,
                     )
                 )
+                self.__orderId__ += 1
             else:
                 raise ValueError(
                     "Take profit price must be greater than current price for BUY order"
@@ -211,16 +253,30 @@ class Broker:
         if name is None:
             name = list(self.__context__.datas.keys())[0]
         data = self.__context__.datas[name]
+        parentId = self.__orderId__
+        self.__orderId__ += 1
         if limit is not None:
             self.orderQueue[name].append(
                 Order(
-                    data.Timestamp[-1], OrderType.LIMIT, Direction.SELL, amount, limit
+                    parentId,
+                    data.Timestamp[-1],
+                    OrderType.LIMIT,
+                    Direction.SELL,
+                    amount,
+                    limit,
+                    None,
                 )
             )
         else:
             self.orderQueue[name].append(
                 Order(
-                    data.Timestamp[-1], OrderType.MARKET, Direction.SELL, amount, None
+                    parentId,
+                    data.Timestamp[-1],
+                    OrderType.MARKET,
+                    Direction.SELL,
+                    amount,
+                    None,
+                    None,
                 )
             )
         if stop_loss is not None:
@@ -228,13 +284,16 @@ class Broker:
             if stop_loss > price:
                 self.orderQueue[name].append(
                     Order(
+                        self.__orderId__,
                         data.Timestamp[-1],
                         OrderType.STOP,
                         Direction.BUY,
                         amount,
                         stop_loss,
+                        parentId,
                     )
                 )
+                self.__orderId__ += 1
             else:
                 raise ValueError(
                     "Stop loss price must be greater than current price for SELL order"
@@ -244,17 +303,56 @@ class Broker:
             if take_profit < price:
                 self.orderQueue[name].append(
                     Order(
+                        self.__orderId__,
                         data.Timestamp[-1],
                         OrderType.STOP,
                         Direction.BUY,
                         amount,
                         take_profit,
+                        parentId,
                     )
                 )
+                self.__orderId__ += 1
             else:
                 raise ValueError(
                     "Take profit price must be less than current price for SELL order"
                 )
+
+    def close(self, name: str | None = None) -> None:
+        if name is None:
+            name = list(self.__context__.datas.keys())[0]
+        totalPositionAmount = 0
+        if len(self.openPositions[name]) == 0:
+            return
+        direction = self.openPositions[name][0].direction
+        for order in self.openPositions[name]:
+            totalPositionAmount += order.amount
+        if direction == Direction.BUY:
+            self.orderQueue[name].append(
+                Order(
+                    self.__orderId__,
+                    self.__context__.datas[name].Timestamp[-1],
+                    OrderType.MARKET,
+                    Direction.SELL,
+                    totalPositionAmount,
+                    None,
+                    None,
+                )
+            )
+            self.__orderId__ += 1
+        else:
+            self.orderQueue[name].append(
+                Order(
+                    self.__orderId__,
+                    self.__context__.datas[name].Timestamp[-1],
+                    OrderType.MARKET,
+                    Direction.BUY,
+                    totalPositionAmount,
+                    None,
+                    None,
+                )
+            )
+            self.__orderId__ += 1
 
     def is_long(self, name: str | None = None) -> bool:
         if name is None:

@@ -1,6 +1,7 @@
 from quantex.datasource import DataSource, PricingData
 from quantex.strategy import Indicator, Strategy
 import numpy as np
+import pandas as pd
 
 
 class Result:
@@ -21,8 +22,51 @@ class Result:
         self.run_strategy = run_strategy
         self.total_trades = total_trades
 
+    @property
     def total_return(self) -> float:
         return (self.equity[-1] - self.starting_cash) / self.starting_cash
+
+    def sharpe_ratio(self, risk_free_rate: float = 0.04):
+        total_time = (
+            self.run_strategy.data.Timestamp[-1] - self.run_strategy.data.Timestamp[0]
+        )
+        years = total_time.days / 365.25
+        periods_per_year = len(self.equity) / years
+        returns = pd.Series(
+            self.equity, index=self.run_strategy.data.Timestamp
+        ).pct_change()
+        risk_free = (1 + risk_free_rate) ** (1 / periods_per_year) - 1
+        std = returns.std()
+        if std == 0:
+            return 0
+        sharpe = (returns.mean() - risk_free) / std * np.sqrt(periods_per_year)
+        return sharpe
+
+    @property
+    def annualized_return(self):
+        total_time = (
+            self.run_strategy.data.Timestamp[-1] - self.run_strategy.data.Timestamp[0]
+        )
+        years = total_time.days / (365.25)
+        return (1 + self.total_return) ** (1 / years) - 1
+
+    @property
+    def max_drawdown(self):
+        peak = self.equity[0]
+        max_drawdown_dollars = 0
+        max_drawdown_percent = 0
+        for value in self.equity:
+            drawdown_dollars = value - peak
+            drawdown_percent = (value - peak) / peak
+            max_drawdown_dollars = min(
+                max_drawdown_dollars,
+                drawdown_dollars,
+            )
+            max_drawdown_percent = min(
+                max_drawdown_percent,
+                drawdown_percent,
+            )
+        return abs(max_drawdown_dollars), abs(max_drawdown_percent)
 
 
 class Backtester:
@@ -66,8 +110,8 @@ class Backtester:
                     skip_nan = True
             if skip_nan:
                 continue
-            strat.next()
             strat.broker.__process_orders__()
+            strat.next()
             equity[i] = strat.broker.equity()
         self.result = Result(equity, initial_cash, strat, strat.broker.total_trades)
         return self.result
