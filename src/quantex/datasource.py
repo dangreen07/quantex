@@ -19,9 +19,9 @@ class DataSource:
         self.name = name
         if df is None:
             return
-        self._init_df(df)
+        self.__init_df__(df)
 
-    def _init_df(self, df: pd.DataFrame):
+    def __init_df__(self, df: pd.DataFrame):
         self.__data: dict[str, np.ndarray] = {}
         self.__data["timestamp"] = df.index.to_numpy(copy=True)
         for col in self.REQUIRED_COLUMNS:
@@ -103,13 +103,13 @@ class YahooDataSource(DataSource):
             data = data[self.REQUIRED_COLUMNS]
             data["timestamp"] = pd.to_datetime(data.index, utc=True)
             data.set_index("timestamp", inplace=True)
-            self._init_df(data)
+            self.__init_df__(data)
         elif period is not None:
             data = yf.Ticker(ticker).history(period=period, interval=interval)
             data = data[["Open", "High", "Low", "Close", "Volume"]]
             data["timestamp"] = pd.to_datetime(data.index, utc=True)
             data.set_index("timestamp", inplace=True)
-            self._init_df(data)
+            self.__init_df__(data)
 
 
 @dataclass

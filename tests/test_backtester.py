@@ -1,7 +1,8 @@
-from quantex.backtester import Backtester
-from quantex.datasource import DataSource, YahooDataSource
+from quantex.backtester import Backtester, SearchType
+from quantex.datasource import DataSource
 from quantex.strategy import Strategy
 import pandas as pd
+import numpy as np
 import pytest
 import talib
 
@@ -57,7 +58,8 @@ class BuyAndHold(Strategy):
 
 def test_backtester():
     bt = Backtester(SMACrossover)
-    source = YahooDataSource("NVDA", start="2020-01-01", end="2025-12-31")
+    data = pd.read_parquet("tests/data/NVDA.parquet")
+    source = DataSource("NVDA", data)
     bt.add_data(source, "NVDA")
     result = bt.run()
     assert result.total_return == pytest.approx(0.6971, rel=1e-2)
@@ -65,6 +67,47 @@ def test_backtester():
     assert result.sharpe_ratio() == pytest.approx(0.47, rel=1e-2)
     assert result.annualized_return == pytest.approx(0.0923, rel=1e-2)
     assert result.max_drawdown == pytest.approx((523.98, 0.0524), rel=1e-2)
+
+
+def test_optimize_grid():
+    bt = Backtester(SMACrossover)
+    data = pd.read_parquet("tests/data/NVDA.parquet")
+    source = DataSource("NVDA", data)
+    bt.add_data(source, "NVDA")
+    max_sharpe, best_trial = bt.optimize(
+        {
+            "fast_period": [1, 2, 3, 4, 5, 10, 15, 20, 25, 30],
+            "slow_period": [1, 2, 3, 4, 5, 10, 15, 20, 25, 50, 75, 100],
+            "trade_size": np.arange(0.05, 1, 0.05).tolist(),
+        },
+        constraint=lambda params: params["fast_period"] < params["slow_period"],
+        max_trials=500,
+    )
+    assert max_sharpe == pytest.approx(1.06, rel=1e-2)
+    assert best_trial["fast_period"] == 1
+    assert best_trial["slow_period"] == 25
+    assert best_trial["trade_size"] == pytest.approx(0.5)
+
+
+def test_optimize_optuna():
+    bt = Backtester(SMACrossover)
+    data = pd.read_parquet("tests/data/NVDA.parquet")
+    source = DataSource("NVDA", data)
+    bt.add_data(source, "NVDA")
+    max_sharpe, best_trial = bt.optimize(
+        {
+            "fast_period": [1, 2, 3, 4, 5, 10, 15, 20, 25, 30],
+            "slow_period": [1, 2, 3, 4, 5, 10, 15, 20, 25, 50, 75, 100],
+            "trade_size": np.arange(0.05, 1, 0.05).tolist(),
+        },
+        constraint=lambda params: params["fast_period"] < params["slow_period"],
+        max_trials=500,
+        search_type=SearchType.OPTUNA,
+    )
+    assert max_sharpe == pytest.approx(1.21, rel=1e-2)
+    assert best_trial["fast_period"] == 20
+    assert best_trial["slow_period"] == 100
+    assert best_trial["trade_size"] == pytest.approx(0.95)
 
 
 def test_basic_backtester():

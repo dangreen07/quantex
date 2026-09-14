@@ -1,9 +1,21 @@
 from quantex.commission import Commission
 from quantex.datasource import DataSource, PricingData
 from quantex.strategy import Indicator, Strategy
+from collections.abc import Callable
 from dataclasses import dataclass
-import numpy as np
+from itertools import product
+from enum import Enum
 import pandas as pd
+import numpy as np
+import optuna
+import tqdm
+import math
+import copy
+
+
+class SearchType(Enum):
+    GRID = 1
+    OPTUNA = 2
 
 
 @dataclass
@@ -130,27 +142,34 @@ class Backtester:
             name = data.name
         self.data.add_data(data, name)
 
-    def run(self) -> Result:
+    def run(self, params: dict | None = None) -> Result:
         """
         Runs the backtest.
+
+        Parameters:
+            params: The parameters to use for the backtest. If None, the default parameters will be used.
 
         Returns:
             Result: The result of the backtest.
         """
-        strat = self.strategy(self.data, cash=self.cash)
+        data = copy.deepcopy(self.data)
+        strat = self.strategy(data, cash=self.cash)
+        if params is not None:
+            for name, value in params.items():
+                setattr(strat, name, value)
         strat.init()
         indicators = [
             i for i in strat.__dict__.keys() if isinstance(strat.__dict__[i], Indicator)
         ]
-        for name in self.data.datas.keys():
-            self.data.datas[name]._current = 0  ## Reset the current index
+        for name in data.datas.keys():
+            data.datas[name]._current = 0  ## Reset the current index
         for indicator in indicators:
             strat.__dict__[indicator]._current = 0
         initial_cash = strat.broker.cash
-        equity = np.full(len(self.data.index), initial_cash, dtype=np.float64)
-        for i in range(len(self.data.index)):
-            for name in self.data.datas.keys():
-                self.data.datas[
+        equity = np.full(len(data.index), initial_cash, dtype=np.float64)
+        for i in range(len(data.index)):
+            for name in data.datas.keys():
+                data.datas[
                     name
                 ]._current += (
                     1  ## TODO: Handle multiple data sources with different indexes
@@ -168,5 +187,79 @@ class Backtester:
             strat.broker.__process_orders__()
             strat.next()
             equity[i] = strat.broker.equity()
-        self.result = Result(equity, initial_cash, strat, strat.broker.total_trades)
-        return self.result
+        result = Result(equity, initial_cash, strat, strat.broker.total_trades)
+        return result
+
+    def optimize(
+        self,
+        params: dict[str, list],
+        constraint: Callable[[dict], bool] | None = None,
+        max_trials: int = 100,
+        search_type: SearchType = SearchType.GRID,
+        risk_free_rate: float = 0.04,
+        seed: int = 0,
+    ) -> tuple[float, dict]:
+        """
+        Optimizes the backtest with the given parameters.
+
+        Parameters:
+            params: The parameters to optimize.
+            max_trials: The maximum number of trials to run.
+            search_type: The search type to use.
+        """
+        self.results = []
+        self.max_sharpe = -np.inf
+        self.best_trial = {}
+        if search_type == SearchType.GRID:
+            search_space = (
+                dict(zip(params.keys(), values)) for values in product(*params.values())
+            )
+            search_space = list(search_space)
+            if constraint is not None:
+                search_space = [trial for trial in search_space if constraint(trial)]
+            search_space = search_space[:max_trials]
+
+            def run_trial(trial):
+                result = self.run(params=trial)
+                sharpe = result.sharpe_ratio(risk_free_rate=risk_free_rate)
+                if sharpe > self.max_sharpe:
+                    self.max_sharpe = sharpe
+                    self.best_trial = trial
+                self.results.append((trial, sharpe))
+
+            for trial in tqdm.tqdm(search_space, desc="Processing"):
+                run_trial(trial)
+        elif search_type == SearchType.OPTUNA:
+            optuna.logging.set_verbosity(optuna.logging.WARNING)
+            sampler = optuna.samplers.TPESampler(seed=seed)
+            study = optuna.create_study(
+                direction="maximize",
+                sampler=sampler,
+            )
+
+            def objective(optuna_trial: optuna.Trial):
+                trial_params = {
+                    name: optuna_trial.suggest_categorical(name, values)
+                    for name, values in params.items()
+                }
+
+                if constraint is not None and not constraint(trial_params):
+                    raise optuna.TrialPruned("Parameter constraint failed")
+
+                result = self.run(params=trial_params)
+                sharpe = result.sharpe_ratio(risk_free_rate=risk_free_rate)
+
+                if sharpe is None or not math.isfinite(sharpe):
+                    raise optuna.TrialPruned("Invalid Sharpe ratio")
+
+                self.results.append((trial_params, sharpe))
+                return sharpe
+
+            study.optimize(objective, n_trials=max_trials, show_progress_bar=True)
+
+            if study.best_trial is None:
+                raise ValueError("No valid parameter combination was found")
+
+            self.best_trial = study.best_params
+            self.max_sharpe = study.best_value
+        return (self.max_sharpe, self.best_trial)
