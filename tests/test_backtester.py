@@ -1,7 +1,6 @@
-from quantex.backtester import Backtester
+from quantex.backtester import Backtester, SearchType
 from quantex.datasource import DataSource
 from quantex.strategy import Strategy
-from matplotlib import pyplot as plt
 import pandas as pd
 import numpy as np
 import pytest
@@ -10,7 +9,7 @@ import talib
 
 class SMACrossover(Strategy):
     fast_period = 5
-    slow_period = 20
+    slow_period = 10
     trade_size = 0.25
 
     def init(self):
@@ -31,8 +30,8 @@ class SMACrossover(Strategy):
             amount = self.broker.equity() * self.trade_size / self.data.Close[-1]
             self.broker.buy(
                 amount=amount,
-                stop_loss=0.95 * self.data.Close[-1],  # type: ignore
-                take_profit=1.1 * self.data.Close[-1],  # type: ignore
+                stop_loss=0.9 * self.data.Close[-1],  # type: ignore
+                take_profit=1.2 * self.data.Close[-1],  # type: ignore
             )
         elif (
             self.fast_ma[-1] < self.slow_ma[-1]
@@ -43,8 +42,8 @@ class SMACrossover(Strategy):
             amount = self.broker.equity() * self.trade_size / self.data.Close[-1]
             self.broker.sell(
                 amount=amount,
-                stop_loss=1.05 * self.data.Close[-1],  # type: ignore
-                take_profit=0.9 * self.data.Close[-1],  # type: ignore
+                stop_loss=1.1 * self.data.Close[-1],  # type: ignore
+                take_profit=0.8 * self.data.Close[-1],  # type: ignore
             )
 
 
@@ -125,56 +124,52 @@ def test_backtester():
     print(f"Sharpe ratio: {result.sharpe_ratio():.2f}")
     print(f"Annualized return: {result.annualized_return:.2%}")
     print(f"Max drawdown: {result.max_drawdown}")
-    plt.plot(result.equity)
-    plt.show()
+    assert result.total_return == pytest.approx(0.6169, rel=1e-2)
+    assert result.total_trades == 157
+    assert result.sharpe_ratio() == pytest.approx(0.4155, rel=1e-2)
+    assert result.annualized_return == pytest.approx(0.0835, rel=1e-2)
+    assert result.max_drawdown == pytest.approx((233.0648, 0.023306), rel=1e-2)
 
 
-# assert result.total_return == pytest.approx(0.6971, rel=1e-2)
-# assert result.total_trades == 102
-# assert result.sharpe_ratio() == pytest.approx(0.47, rel=1e-2)
-# assert result.annualized_return == pytest.approx(0.0923, rel=1e-2)
-# assert result.max_drawdown == pytest.approx((523.98, 0.0524), rel=1e-2)
+def test_optimize_grid():
+    bt = Backtester(SMACrossover)
+    data = pd.read_parquet("tests/data/NVDA.parquet")
+    source = DataSource("NVDA", data)
+    bt.add_data(source, "NVDA")
+    max_sharpe, best_trial = bt.optimize(
+        {
+            "fast_period": [1, 2, 3, 4, 5, 10, 15, 20, 25, 30],
+            "slow_period": [1, 2, 3, 4, 5, 10, 15, 20, 25, 50, 75, 100],
+            "trade_size": np.arange(0.05, 1, 0.05).tolist(),
+        },
+        constraint=lambda params: params["fast_period"] < params["slow_period"],
+        max_trials=500,
+    )
+    assert max_sharpe == pytest.approx(0.4884, rel=1e-2)
+    assert best_trial["fast_period"] == 3
+    assert best_trial["slow_period"] == 15
+    assert best_trial["trade_size"] == pytest.approx(0.95)
 
 
-# def test_optimize_grid():
-#     bt = Backtester(SMACrossover)
-#     data = pd.read_parquet("tests/data/NVDA.parquet")
-#     source = DataSource("NVDA", data)
-#     bt.add_data(source, "NVDA")
-#     max_sharpe, best_trial = bt.optimize(
-#         {
-#             "fast_period": [1, 2, 3, 4, 5, 10, 15, 20, 25, 30],
-#             "slow_period": [1, 2, 3, 4, 5, 10, 15, 20, 25, 50, 75, 100],
-#             "trade_size": np.arange(0.05, 1, 0.05).tolist(),
-#         },
-#         constraint=lambda params: params["fast_period"] < params["slow_period"],
-#         max_trials=500,
-#     )
-#     assert max_sharpe == pytest.approx(1.06, rel=1e-2)
-#     assert best_trial["fast_period"] == 1
-#     assert best_trial["slow_period"] == 25
-#     assert best_trial["trade_size"] == pytest.approx(0.5)
-
-
-# def test_optimize_optuna():
-#     bt = Backtester(SMACrossover)
-#     data = pd.read_parquet("tests/data/NVDA.parquet")
-#     source = DataSource("NVDA", data)
-#     bt.add_data(source, "NVDA")
-#     max_sharpe, best_trial = bt.optimize(
-#         {
-#             "fast_period": [1, 2, 3, 4, 5, 10, 15, 20, 25, 30],
-#             "slow_period": [1, 2, 3, 4, 5, 10, 15, 20, 25, 50, 75, 100],
-#             "trade_size": np.arange(0.05, 1, 0.05).tolist(),
-#         },
-#         constraint=lambda params: params["fast_period"] < params["slow_period"],
-#         max_trials=500,
-#         search_type=SearchType.OPTUNA,
-#     )
-#     assert max_sharpe == pytest.approx(1.21, rel=1e-2)
-#     assert best_trial["fast_period"] == 20
-#     assert best_trial["slow_period"] == 100
-#     assert best_trial["trade_size"] == pytest.approx(0.95)
+def test_optimize_optuna():
+    bt = Backtester(SMACrossover)
+    data = pd.read_parquet("tests/data/NVDA.parquet")
+    source = DataSource("NVDA", data)
+    bt.add_data(source, "NVDA")
+    max_sharpe, best_trial = bt.optimize(
+        {
+            "fast_period": [1, 2, 3, 4, 5, 10, 15, 20, 25, 30],
+            "slow_period": [1, 2, 3, 4, 5, 10, 15, 20, 25, 50, 75, 100],
+            "trade_size": np.arange(0.05, 1, 0.05).tolist(),
+        },
+        constraint=lambda params: params["fast_period"] < params["slow_period"],
+        max_trials=500,
+        search_type=SearchType.OPTUNA,
+    )
+    assert max_sharpe == pytest.approx(0.6695, rel=1e-2)
+    assert best_trial["fast_period"] == 5
+    assert best_trial["slow_period"] == 10
+    assert best_trial["trade_size"] == pytest.approx(0.95)
 
 
 def test_basic_backtester():
