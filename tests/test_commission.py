@@ -13,6 +13,8 @@ def test_no_commission():
         50,
         125,
         None,
+        pd.Timestamp("2022-01-02"),
+        0,
     )
     commission = Commission()
     assert commission.calculate(order, 124.5) == 0
@@ -27,6 +29,8 @@ def test_fixed_per_order_commission():
         50,
         125,
         None,
+        pd.Timestamp("2022-01-02"),
+        0,
     )
     commission = Commission(ApplicationType.PER_ORDER, fixed=0.5)
     assert commission.calculate(order, 124.5) == pytest.approx(0.5)
@@ -41,6 +45,8 @@ def test_fixed_per_contract_commission():
         50,
         125,
         None,
+        pd.Timestamp("2022-01-02"),
+        0,
     )
     commission = Commission(ApplicationType.PER_CONTRACT, fixed=0.5)
     assert commission.calculate(order, 124.5) == pytest.approx(25)
@@ -55,6 +61,8 @@ def test_percentage_per_order_commission():
         50,
         125,
         None,
+        pd.Timestamp("2022-01-02"),
+        0,
     )
     commission = Commission(ApplicationType.PER_ORDER, percentage=0.005)
     assert commission.calculate(order, 124.5) == pytest.approx(31.125)
@@ -69,6 +77,8 @@ def test_percentage_per_contract_commission():
         50,
         125,
         None,
+        pd.Timestamp("2022-01-02"),
+        0,
     )
     commission = Commission(ApplicationType.PER_ORDER, percentage=0.005)
     assert commission.calculate(order, 124.5) == pytest.approx(31.125)

@@ -16,9 +16,9 @@ class OrderDirection(Enum):
 
 
 @dataclass
-class Order:
+class NewOrder:
     id: int
-    timestamp: pd.Timestamp
+    transmit_timestamp: pd.Timestamp
     type: OrderType
     direction: OrderDirection
     amount: float
@@ -26,8 +26,15 @@ class Order:
     parentId: int | None
 
 
+@dataclass
+class Order(NewOrder):
+    fill_timestamp: pd.Timestamp
+    amount_filled: float
+
+
 class Broker:
-    orderQueue: dict[str, list[Order]]  ## Orders to be processed
+    orderQueue: dict[str, list[NewOrder]]  ## Orders to be processed
+    cancelQueue: dict[str, list[NewOrder]]  ## Orders that need to be cancelled
     processedOrders: dict[str, list[Order]]  ## Orders that have been processed
     openPositions: dict[str, list[Order]]  ## Orders that are currently open
     __orderId__: int
@@ -38,15 +45,16 @@ class Broker:
         self.orderQueue = {}
         self.processedOrders = {}
         self.openPositions = {}
+        self.cancelQueue = {}
         self.__context__ = context
         self.__orderId__ = 1
-        self.orderQueue = {}
         for name in self.__context__.datas.keys():
             self.orderQueue[name] = []
             self.processedOrders[name] = []
             self.openPositions[name] = []
+            self.cancelQueue[name] = []
 
-    def execute_condition(self, order: Order, price: float) -> bool:
+    def execute_condition(self, order: NewOrder, price: float) -> bool:
         if order.type == OrderType.MARKET:
             return True
         elif order.type == OrderType.LIMIT and order.price:
@@ -61,19 +69,27 @@ class Broker:
                 return True
         return False
 
-    def __process_order__(self, order: Order, name: str):
+    def __process_order__(self, order: NewOrder, name: str):
         openPositionsDirection = None
         if self.openPositions[name] and len(self.openPositions[name]) > 0:
             openPositionsDirection = self.openPositions[name][0].direction
+        curr_timestamp = self.__context__.datas[name].Timestamp[-1]
         if openPositionsDirection and openPositionsDirection != order.direction:
             price: float = self.__context__.datas[name].Close[-1]
             if self.execute_condition(order, price):
-                total = order.amount * price
                 amount = order.amount
                 for i in range(len(self.openPositions[name])):
-                    open_amount = self.openPositions[name][i].amount
+                    open_amount = self.openPositions[name][i].amount_filled
                     closed_amount = min(open_amount, amount)
-                    self.openPositions[name][i].amount -= closed_amount
+                    self.openPositions[name][i].amount_filled -= closed_amount
+                    if self.openPositions[name][i].amount_filled == 0:
+                        ## Check if the order has any take profit or stop loss and if so, cancel it
+                        queueParents = [i.parentId for i in self.orderQueue[name]]
+                        if self.openPositions[name][i].id in queueParents:
+                            item = self.orderQueue[name][
+                                queueParents.index(self.openPositions[name][i].id)
+                            ]
+                            self.cancelQueue[name].append(item)
                     amount -= closed_amount
                     if amount == 0:
                         if order.parentId is not None:
@@ -92,7 +108,7 @@ class Broker:
                         break
                 positions = []
                 for openOrder in self.openPositions[name]:
-                    if openOrder.amount > 0:
+                    if openOrder.amount_filled > 0:
                         positions.append(
                             openOrder
                         )  ## This order has not been fully executed
@@ -106,19 +122,32 @@ class Broker:
                     positions.append(
                         Order(
                             order.id,
-                            order.timestamp,
+                            order.transmit_timestamp,
                             order.type,
                             order.direction,
-                            amount,
+                            order.amount,
                             order.price,
                             order.parentId,
+                            curr_timestamp,
+                            order.amount - amount,  ## Partially filled
                         )
                     )
                 else:
                     self.processedOrders[name].append(
-                        order
+                        Order(
+                            order.id,
+                            order.transmit_timestamp,
+                            order.type,
+                            order.direction,
+                            order.amount,
+                            order.price,
+                            order.parentId,
+                            curr_timestamp,
+                            order.amount,  ## Fully filled
+                        )
                     )  ## This order has been fully executed
                 self.openPositions[name] = positions
+                total = (order.amount - amount) * price
                 if order.direction == OrderDirection.BUY:
                     self.cash -= total
                 else:
@@ -128,7 +157,19 @@ class Broker:
             price: float = self.__context__.datas[name].Close[-1]
             if self.execute_condition(order, price):
                 total = order.amount * price
-                self.openPositions[name].append(order)
+                self.openPositions[name].append(
+                    Order(
+                        order.id,
+                        order.transmit_timestamp,
+                        order.type,
+                        order.direction,
+                        order.amount,
+                        order.price,
+                        order.parentId,
+                        curr_timestamp,
+                        order.amount,  ## Fully filled
+                    )
+                )
                 if order.direction == OrderDirection.BUY:
                     self.cash -= total
                 else:
@@ -140,6 +181,9 @@ class Broker:
         for name in self.orderQueue.keys():
             queue = []
             for order in self.orderQueue[name]:
+                if order in self.cancelQueue[name]:
+                    self.cancelQueue[name].remove(order)
+                    continue
                 if not self.__process_order__(order, name):
                     queue.append(order)
             self.orderQueue[name] = queue
@@ -156,9 +200,9 @@ class Broker:
             for order in self.openPositions[name]:
                 prices = self.__context__.datas[name].Close
                 if order.direction == OrderDirection.BUY:
-                    equity += order.amount * prices[-1]
+                    equity += order.amount_filled * prices[-1]
                 else:
-                    equity -= order.amount * prices[-1]
+                    equity -= order.amount_filled * prices[-1]
         return equity
 
     def buy(
@@ -186,7 +230,7 @@ class Broker:
         self.__orderId__ += 1
         if limit is not None:
             self.orderQueue[name].append(
-                Order(
+                NewOrder(
                     parentId,
                     data.Timestamp[-1],
                     OrderType.LIMIT,
@@ -198,7 +242,7 @@ class Broker:
             )
         else:
             self.orderQueue[name].append(
-                Order(
+                NewOrder(
                     parentId,
                     data.Timestamp[-1],
                     OrderType.MARKET,
@@ -212,7 +256,7 @@ class Broker:
             price = limit or data.Close[-1]
             if stop_loss < price:
                 self.orderQueue[name].append(
-                    Order(
+                    NewOrder(
                         self.__orderId__,
                         data.Timestamp[-1],
                         OrderType.STOP,
@@ -231,10 +275,10 @@ class Broker:
             price = limit or data.Close[-1]
             if take_profit > price:
                 self.orderQueue[name].append(
-                    Order(
+                    NewOrder(
                         self.__orderId__,
                         data.Timestamp[-1],
-                        OrderType.STOP,
+                        OrderType.LIMIT,
                         OrderDirection.SELL,
                         amount,
                         take_profit,
@@ -265,6 +309,8 @@ class Broker:
             stop_loss: The stop loss price to use. If None, no stop loss will be used.
             take_profit: The take profit price to use. If None, no take profit will be used.
         """
+        if amount <= 0:
+            raise ValueError("Amount must be greater than 0")
         if name is None:
             name = list(self.__context__.datas.keys())[0]
         data = self.__context__.datas[name]
@@ -272,7 +318,7 @@ class Broker:
         self.__orderId__ += 1
         if limit is not None:
             self.orderQueue[name].append(
-                Order(
+                NewOrder(
                     parentId,
                     data.Timestamp[-1],
                     OrderType.LIMIT,
@@ -284,7 +330,7 @@ class Broker:
             )
         else:
             self.orderQueue[name].append(
-                Order(
+                NewOrder(
                     parentId,
                     data.Timestamp[-1],
                     OrderType.MARKET,
@@ -298,7 +344,7 @@ class Broker:
             price = limit or data.Close[-1]
             if stop_loss > price:
                 self.orderQueue[name].append(
-                    Order(
+                    NewOrder(
                         self.__orderId__,
                         data.Timestamp[-1],
                         OrderType.STOP,
@@ -317,10 +363,10 @@ class Broker:
             price = limit or data.Close[-1]
             if take_profit < price:
                 self.orderQueue[name].append(
-                    Order(
+                    NewOrder(
                         self.__orderId__,
                         data.Timestamp[-1],
-                        OrderType.STOP,
+                        OrderType.LIMIT,
                         OrderDirection.BUY,
                         amount,
                         take_profit,
@@ -347,10 +393,10 @@ class Broker:
             return
         direction = self.openPositions[name][0].direction
         for order in self.openPositions[name]:
-            totalPositionAmount += order.amount
+            totalPositionAmount += order.amount_filled
         if direction == OrderDirection.BUY:
             self.orderQueue[name].append(
-                Order(
+                NewOrder(
                     self.__orderId__,
                     self.__context__.datas[name].Timestamp[-1],
                     OrderType.MARKET,
@@ -363,7 +409,7 @@ class Broker:
             self.__orderId__ += 1
         else:
             self.orderQueue[name].append(
-                Order(
+                NewOrder(
                     self.__orderId__,
                     self.__context__.datas[name].Timestamp[-1],
                     OrderType.MARKET,

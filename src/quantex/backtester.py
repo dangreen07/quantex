@@ -37,6 +37,29 @@ class Result:
         self.total_trades = total_trades
 
     @property
+    def timedelta(self) -> pd.Timedelta:
+        """
+        The amount of time elapsed between the start and end of the backtest.
+        """
+        return (
+            self.run_strategy.data.Timestamp[-1] - self.run_strategy.data.Timestamp[0]
+        )
+
+    @property
+    def start(self) -> pd.Timestamp:
+        """
+        The start time of the backtest.
+        """
+        return self.run_strategy.data.Timestamp[0]
+
+    @property
+    def end(self) -> pd.Timestamp:
+        """
+        The end time of the backtest.
+        """
+        return self.run_strategy.data.Timestamp[-1]
+
+    @property
     def total_return(self) -> float:
         """
         The total return of the backtest as a percentage.
