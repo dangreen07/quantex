@@ -18,6 +18,7 @@ dependencies = [
     "mplfinance (>=0.12.10b0,<0.13.0)",
     "yfinance (>=1.7.0,<2.0.0)",
     "ta-lib (>=0.7.1,<0.8.0)",
+    "mkdocs (>=1.6.1,<2.0.0)",
 ]
 
 [tool.poetry]

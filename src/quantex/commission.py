@@ -3,6 +3,10 @@ from enum import Enum
 
 
 class ApplicationType(Enum):
+    """
+    The application type for a commission.
+    """
+
     PER_ORDER = 1  ## Applies for each order
     PER_CONTRACT = 2  ## Applies for each contract
 
@@ -16,20 +20,30 @@ class Commission:
     ):
         """
         This object is used for calculating commissions for a strategy.
+
         Parameters:
-            application: (ApplicationType)
-                - PER_ORDER: Applies for each order
-                - PER_CONTRACT: Applies for each contract
-            fixed: (float | None)
+            application:
+                The application type for the commission.
+            fixed:
                 The fixed commission amount per order or contract. If None, don't use fixed commission.
-            percentage: (float | None)
+            percentage:
                 The percentage commission amount per order or contract. If None, don't use percentage commission.
         """
         self.application = application
         self.fixed = fixed
         self.percentage = percentage
 
-    def calculate(self, order: Order, fill_price: float):
+    def calculate(self, order: Order, fill_price: float) -> float:
+        """
+        Calculates the commission for an order.
+
+        Parameters:
+            order: The order to calculate the commission for.
+            fill_price: The fill price for the order.
+
+        Returns:
+            The commission for the order.
+        """
         commission = 0
         if self.application == ApplicationType.PER_ORDER:
             if self.fixed is not None:

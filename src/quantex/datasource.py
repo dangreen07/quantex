@@ -7,16 +7,22 @@ import numpy as np
 
 class DataSource:
     REQUIRED_COLUMNS = ["Open", "High", "Low", "Close", "Volume"]
-    __data: dict[str, np.ndarray]
 
     def __init__(self, name: str, df: pd.DataFrame | None = None):
+        """
+        DataSource is a class that provides access to data.
+
+        Parameters:
+            name: The name of the data source.
+            df: The data frame to use as the data source. If None, an empty data source will be created.
+        """
         self.name = name
         if df is None:
             return
         self._init_df(df)
 
     def _init_df(self, df: pd.DataFrame):
-        self.__data = {}
+        self.__data: dict[str, np.ndarray] = {}
         self.__data["timestamp"] = df.index.to_numpy(copy=True)
         for col in self.REQUIRED_COLUMNS:
             if col not in df.columns:
@@ -28,26 +34,44 @@ class DataSource:
 
     @property
     def Timestamp(self):
+        """
+        The timestamps of the data.
+        """
         return self.__data["timestamp"][: self._current]
 
     @property
     def Open(self):
+        """
+        The open prices of the data.
+        """
         return self.__data["Open"][: self._current]
 
     @property
     def High(self):
+        """
+        The high prices of the data.
+        """
         return self.__data["High"][: self._current]
 
     @property
     def Low(self):
+        """
+        The low prices of the data.
+        """
         return self.__data["Low"][: self._current]
 
     @property
     def Close(self):
+        """
+        The close prices of the data.
+        """
         return self.__data["Close"][: self._current]
 
     @property
     def Volume(self):
+        """
+        The volume of the data.
+        """
         return self.__data["Volume"][: self._current]
 
     def __len__(self):
@@ -63,6 +87,16 @@ class YahooDataSource(DataSource):
         end: str | None = None,
         interval: str = "1d",
     ):
+        """
+        YahooDataSource is a class that provides access to Yahoo Finance data.
+
+        Parameters:
+            ticker: The ticker symbol of the stock to retrieve data for.
+            period: The period of the data to retrieve. Can be "1d", "5d", "1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "ytd", "max".
+            start: The start date of the data to retrieve. If None, the start date will be the first date available.
+            end: The end date of the data to retrieve. If None, the end date will be the last date available.
+            interval: The interval of the data to retrieve. Can be "1d", "5d", "1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "ytd", "max".
+        """
         super().__init__(name=ticker)
         if start is not None:
             data = yf.Ticker(ticker).history(start=start, end=end, interval=interval)

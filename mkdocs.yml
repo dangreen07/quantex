@@ -23,9 +23,14 @@ theme:
         name: Switch to light mode
 nav:
   - Home: index.md
+  - API Reference:
+      - Backtester: api-docs/backtester.md
+      - Broker: api-docs/broker.md
+      - Commission: api-docs/commission.md
+      - DataSource: api-docs/datasource.md
+      - Strategy: api-docs/strategy.md
 plugins:
   - search
-  - to-pdf
   - mkdocstrings:
       handlers:
         python:

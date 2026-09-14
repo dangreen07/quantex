@@ -26,25 +26,6 @@ class Order:
     parentId: int | None
 
 
-def execute_condition(order: Order, price: float):
-    """
-    Figures out if an order should execute and executes it based on it.
-    """
-    if order.type == OrderType.MARKET:
-        return True
-    elif order.type == OrderType.LIMIT and order.price:
-        if order.direction == OrderDirection.BUY and price <= order.price:
-            return True
-        elif order.direction == OrderDirection.SELL and price >= order.price:
-            return True
-    elif order.type == OrderType.STOP and order.price:
-        if order.direction == OrderDirection.BUY and price >= order.price:
-            return True
-        elif order.direction == OrderDirection.SELL and price <= order.price:
-            return True
-    return False
-
-
 class Broker:
     orderQueue: dict[str, list[Order]]  ## Orders to be processed
     processedOrders: dict[str, list[Order]]  ## Orders that have been processed
@@ -65,17 +46,28 @@ class Broker:
             self.processedOrders[name] = []
             self.openPositions[name] = []
 
+    def execute_condition(self, order: Order, price: float) -> bool:
+        if order.type == OrderType.MARKET:
+            return True
+        elif order.type == OrderType.LIMIT and order.price:
+            if order.direction == OrderDirection.BUY and price <= order.price:
+                return True
+            elif order.direction == OrderDirection.SELL and price >= order.price:
+                return True
+        elif order.type == OrderType.STOP and order.price:
+            if order.direction == OrderDirection.BUY and price >= order.price:
+                return True
+            elif order.direction == OrderDirection.SELL and price <= order.price:
+                return True
+        return False
+
     def __process_order__(self, order: Order, name: str):
-        """
-        Processes an order and updates the broker accordingly.
-        Currently does not support margin or futures contracts.
-        """
         openPositionsDirection = None
         if self.openPositions[name] and len(self.openPositions[name]) > 0:
             openPositionsDirection = self.openPositions[name][0].direction
         if openPositionsDirection and openPositionsDirection != order.direction:
             price: float = self.__context__.datas[name].Close[-1]
-            if execute_condition(order, price):
+            if self.execute_condition(order, price):
                 total = order.amount * price
                 amount = order.amount
                 for i in range(len(self.openPositions[name])):
@@ -134,7 +126,7 @@ class Broker:
                 return True
         else:
             price: float = self.__context__.datas[name].Close[-1]
-            if execute_condition(order, price):
+            if self.execute_condition(order, price):
                 total = order.amount * price
                 self.openPositions[name].append(order)
                 if order.direction == OrderDirection.BUY:
@@ -155,8 +147,9 @@ class Broker:
     def equity(self) -> float:
         """
         Get the current equity at the current time.
+
         Returns:
-            float: The current equity.
+            The current equity.
         """
         equity = self.cash
         for name in self.orderQueue.keys():
@@ -176,6 +169,16 @@ class Broker:
         stop_loss: float | None = None,
         take_profit: float | None = None,
     ) -> None:
+        """
+        Places a buy order.
+
+        Parameters:
+            name: The name of the data source to buy from. If None, the first data source in the context will be used.
+            amount: The amount of shares to buy.
+            limit: The limit price to buy at. If None, a market order will be placed.
+            stop_loss: The stop loss price to use. If None, no stop loss will be used.
+            take_profit: The take profit price to use. If None, no take profit will be used.
+        """
         if name is None:
             name = list(self.__context__.datas.keys())[0]
         data = self.__context__.datas[name]
@@ -252,6 +255,16 @@ class Broker:
         stop_loss: float | None = None,
         take_profit: float | None = None,
     ) -> None:
+        """
+        Places a sell order.
+
+        Parameters:
+            name: The name of the data source to sell from. If None, the first data source in the context will be used.
+            amount: The amount of shares to sell.
+            limit: The limit price to sell at. If None, a market order will be placed.
+            stop_loss: The stop loss price to use. If None, no stop loss will be used.
+            take_profit: The take profit price to use. If None, no take profit will be used.
+        """
         if name is None:
             name = list(self.__context__.datas.keys())[0]
         data = self.__context__.datas[name]
@@ -321,6 +334,12 @@ class Broker:
                 )
 
     def close(self, name: str | None = None) -> None:
+        """
+        Closes all open positions.
+
+        Parameters:
+            name: The name of the data source to close positions from. If None, the first data source in the context will be used.
+        """
         if name is None:
             name = list(self.__context__.datas.keys())[0]
         totalPositionAmount = 0
@@ -357,6 +376,15 @@ class Broker:
             self.__orderId__ += 1
 
     def is_long(self, name: str | None = None) -> bool:
+        """
+        Checks if the broker is long.
+
+        Parameters:
+            name: The name of the data source to check. If None, the first data source in the context will be used.
+
+        Returns:
+            True if the broker is long, False otherwise.
+        """
         if name is None:
             name = list(self.__context__.datas.keys())[0]
         if len(self.openPositions[name]) == 0:
@@ -364,6 +392,15 @@ class Broker:
         return self.openPositions[name][0].direction == OrderDirection.BUY
 
     def is_short(self, name: str | None = None) -> bool:
+        """
+        Checks if the broker is short.
+
+        Parameters:
+            name: The name of the data source to check. If None, the first data source in the context will be used.
+
+        Returns:
+            True if the broker is short, False otherwise.
+        """
         if name is None:
             name = list(self.__context__.datas.keys())[0]
         if len(self.openPositions[name]) == 0:
@@ -371,6 +408,15 @@ class Broker:
         return self.openPositions[name][0].direction == OrderDirection.SELL
 
     def is_closed(self, name: str | None = None) -> bool:
+        """
+        Checks if the broker is closed.
+
+        Parameters:
+            name: The name of the data source to check. If None, the first data source in the context will be used.
+
+        Returns:
+            True if the broker is closed, False otherwise.
+        """
         if name is None:
             name = list(self.__context__.datas.keys())[0]
         if len(self.openPositions[name]) == 0:

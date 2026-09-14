@@ -8,6 +8,10 @@ import pandas as pd
 
 @dataclass
 class Result:
+    """
+    This class contains the result of a backtest.
+    """
+
     def __init__(
         self,
         equity: np.ndarray,
@@ -22,9 +26,22 @@ class Result:
 
     @property
     def total_return(self) -> float:
+        """
+        The total return of the backtest as a percentage.
+        """
         return (self.equity[-1] - self.starting_cash) / self.starting_cash
 
-    def sharpe_ratio(self, risk_free_rate: float = 0.04):
+    def sharpe_ratio(self, risk_free_rate: float = 0.04) -> float:
+        """
+        The yearly sharpe ratio of the backtest.
+
+        Parameters:
+            risk_free_rate:
+                The risk free rate to be used in the calculation.
+
+        Returns:
+            The yearly sharpe ratio of the backtest.
+        """
         total_time = (
             self.run_strategy.data.Timestamp[-1] - self.run_strategy.data.Timestamp[0]
         )
@@ -42,6 +59,9 @@ class Result:
 
     @property
     def annualized_return(self):
+        """
+        The annualized return of the backtest.
+        """
         total_time = (
             self.run_strategy.data.Timestamp[-1] - self.run_strategy.data.Timestamp[0]
         )
@@ -49,7 +69,13 @@ class Result:
         return (1 + self.total_return) ** (1 / years) - 1
 
     @property
-    def max_drawdown(self):
+    def max_drawdown(self) -> tuple[float, float]:
+        """
+        The maximum drawdown of the backtest
+
+        Returns:
+            The maximum drawdown in dollars and percentage, respectively.
+        """
         peak = self.equity[0]
         max_drawdown_dollars = 0
         max_drawdown_percent = 0
@@ -74,17 +100,43 @@ class Backtester:
         commission: Commission | None = None,
         cash: float = 10_000,
     ):
+        """
+        This class is used to run a backtest on a strategy.
+
+        Parameters:
+            strategy:
+                The strategy to be run.
+            commission:
+                The commission to be applied to the strategy. If None, no commission will be applied.
+            cash:
+                The starting cash to be used in the backtest.
+        """
         self.strategy = strategy
         self.data = PricingData()
         self.cash = cash
         self.commission = commission or Commission()
 
     def add_data(self, data: DataSource, name: str | None = None):
+        """
+        Adds a data source to the backtest.
+
+        Parameters:
+            data:
+                The data source to be added.
+            name:
+                The name of the data source. If None, the name will be the same as the data source.
+        """
         if name is None:
             name = data.name
         self.data.add_data(data, name)
 
-    def run(self):
+    def run(self) -> Result:
+        """
+        Runs the backtest.
+
+        Returns:
+            Result: The result of the backtest.
+        """
         strat = self.strategy(self.data, cash=self.cash)
         strat.init()
         indicators = [
