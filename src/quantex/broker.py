@@ -75,7 +75,7 @@ class Broker:
             openPositionsDirection = self.openPositions[name][0].direction
         curr_timestamp = self.__context__.datas[name].Timestamp[-1]
         if openPositionsDirection and openPositionsDirection != order.direction:
-            price: float = self.__context__.datas[name].Close[-1]
+            price: float = self.__context__.datas[name].Open[-1]
             if self.execute_condition(order, price):
                 amount = order.amount
                 for i in range(len(self.openPositions[name])):
@@ -93,18 +93,14 @@ class Broker:
                     amount -= closed_amount
                     if amount == 0:
                         if order.parentId is not None:
-                            idx = 0
-                            for i in range(len(self.orderQueue[name])):
-                                if self.orderQueue[name][i].id == order.id:
-                                    continue
-                                elif (
-                                    self.orderQueue[name][i].parentId == order.parentId
+                            for queued_order in self.orderQueue[name]:
+                                if (
+                                    queued_order.id != order.id
+                                    and queued_order.parentId == order.parentId
                                 ):
-                                    idx = i
-                                    break
-                            self.orderQueue[name].pop(
-                                idx
-                            )  ## OCO - One Cancels the Other
+                                    self.cancelQueue[name].append(
+                                        queued_order
+                                    )  ## OCO - One Cancels the Other
                         break
                 positions = []
                 for openOrder in self.openPositions[name]:
@@ -154,7 +150,7 @@ class Broker:
                     self.cash += total
                 return True
         else:
-            price: float = self.__context__.datas[name].Close[-1]
+            price: float = self.__context__.datas[name].Open[-1]
             if self.execute_condition(order, price):
                 total = order.amount * price
                 self.openPositions[name].append(
@@ -388,38 +384,35 @@ class Broker:
         """
         if name is None:
             name = list(self.__context__.datas.keys())[0]
-        totalPositionAmount = 0
         if len(self.openPositions[name]) == 0:
             return
-        direction = self.openPositions[name][0].direction
         for order in self.openPositions[name]:
-            totalPositionAmount += order.amount_filled
-        if direction == OrderDirection.BUY:
-            self.orderQueue[name].append(
-                NewOrder(
-                    self.__orderId__,
-                    self.__context__.datas[name].Timestamp[-1],
-                    OrderType.MARKET,
-                    OrderDirection.SELL,
-                    totalPositionAmount,
-                    None,
-                    None,
+            if order.direction == OrderDirection.BUY:
+                self.orderQueue[name].append(
+                    NewOrder(
+                        self.__orderId__,
+                        self.__context__.datas[name].Timestamp[-1],
+                        OrderType.MARKET,
+                        OrderDirection.SELL,
+                        order.amount_filled,
+                        None,
+                        order.parentId or order.id,
+                    )
                 )
-            )
-            self.__orderId__ += 1
-        else:
-            self.orderQueue[name].append(
-                NewOrder(
-                    self.__orderId__,
-                    self.__context__.datas[name].Timestamp[-1],
-                    OrderType.MARKET,
-                    OrderDirection.BUY,
-                    totalPositionAmount,
-                    None,
-                    None,
+                self.__orderId__ += 1
+            elif order.direction == OrderDirection.SELL:
+                self.orderQueue[name].append(
+                    NewOrder(
+                        self.__orderId__,
+                        self.__context__.datas[name].Timestamp[-1],
+                        OrderType.MARKET,
+                        OrderDirection.BUY,
+                        order.amount_filled,
+                        None,
+                        order.parentId or order.id,
+                    )
                 )
-            )
-            self.__orderId__ += 1
+                self.__orderId__ += 1
 
     def is_long(self, name: str | None = None) -> bool:
         """
