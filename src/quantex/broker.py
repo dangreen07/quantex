@@ -1,7 +1,7 @@
+from quantex.datasource import PricingData
 from dataclasses import dataclass
 import pandas as pd
 from enum import Enum
-from quantex.datasource import PricingData
 
 
 class OrderType(Enum):
@@ -375,44 +375,48 @@ class Broker:
                     "Take profit price must be less than current price for SELL order"
                 )
 
-    def close(self, name: str | None = None) -> None:
+    def close(self, data_name: str | None = None) -> None:
         """
         Closes all open positions.
 
         Parameters:
             name: The name of the data source to close positions from. If None, the first data source in the context will be used.
         """
-        if name is None:
-            name = list(self.__context__.datas.keys())[0]
-        if len(self.openPositions[name]) == 0:
-            return
-        for order in self.openPositions[name]:
-            if order.direction == OrderDirection.BUY:
-                self.orderQueue[name].append(
-                    NewOrder(
-                        self.__orderId__,
-                        self.__context__.datas[name].Timestamp[-1],
-                        OrderType.MARKET,
-                        OrderDirection.SELL,
-                        order.amount_filled,
-                        None,
-                        order.parentId or order.id,
+        names = (
+            [data_name]
+            if data_name is not None
+            else list(self.__context__.datas.keys())
+        )
+        for name in names:
+            if len(self.openPositions[name]) == 0:
+                return
+            for order in self.openPositions[name]:
+                if order.direction == OrderDirection.BUY:
+                    self.orderQueue[name].append(
+                        NewOrder(
+                            self.__orderId__,
+                            self.__context__.datas[name].Timestamp[-1],
+                            OrderType.MARKET,
+                            OrderDirection.SELL,
+                            order.amount_filled,
+                            None,
+                            order.parentId or order.id,
+                        )
                     )
-                )
-                self.__orderId__ += 1
-            elif order.direction == OrderDirection.SELL:
-                self.orderQueue[name].append(
-                    NewOrder(
-                        self.__orderId__,
-                        self.__context__.datas[name].Timestamp[-1],
-                        OrderType.MARKET,
-                        OrderDirection.BUY,
-                        order.amount_filled,
-                        None,
-                        order.parentId or order.id,
+                    self.__orderId__ += 1
+                elif order.direction == OrderDirection.SELL:
+                    self.orderQueue[name].append(
+                        NewOrder(
+                            self.__orderId__,
+                            self.__context__.datas[name].Timestamp[-1],
+                            OrderType.MARKET,
+                            OrderDirection.BUY,
+                            order.amount_filled,
+                            None,
+                            order.parentId or order.id,
+                        )
                     )
-                )
-                self.__orderId__ += 1
+                    self.__orderId__ += 1
 
     def is_long(self, name: str | None = None) -> bool:
         """

@@ -1,7 +1,8 @@
-from quantex.commission import Commission
 from quantex.datasource import DataSource, PricingData
 from quantex.strategy import Indicator, Strategy
+from quantex.commission import Commission
 from collections.abc import Callable
+from matplotlib import pyplot as plt
 from dataclasses import dataclass
 from itertools import product
 from enum import Enum
@@ -41,23 +42,21 @@ class Result:
         """
         The amount of time elapsed between the start and end of the backtest.
         """
-        return (
-            self.run_strategy.data.Timestamp[-1] - self.run_strategy.data.Timestamp[0]
-        )
+        return self.run_strategy.index[-1] - self.run_strategy.index[0]
 
     @property
     def start(self) -> pd.Timestamp:
         """
         The start time of the backtest.
         """
-        return self.run_strategy.data.Timestamp[0]
+        return self.run_strategy.index[0]
 
     @property
     def end(self) -> pd.Timestamp:
         """
         The end time of the backtest.
         """
-        return self.run_strategy.data.Timestamp[-1]
+        return self.run_strategy.index[-1]
 
     @property
     def total_return(self) -> float:
@@ -77,14 +76,10 @@ class Result:
         Returns:
             The yearly sharpe ratio of the backtest.
         """
-        total_time = (
-            self.run_strategy.data.Timestamp[-1] - self.run_strategy.data.Timestamp[0]
-        )
+        total_time = self.run_strategy.index[-1] - self.run_strategy.index[0]
         years = total_time.days / 365.25
         periods_per_year = len(self.equity) / years
-        returns = pd.Series(
-            self.equity, index=self.run_strategy.data.Timestamp
-        ).pct_change()
+        returns = pd.Series(self.equity, index=self.run_strategy.index).pct_change()
         risk_free = (1 + risk_free_rate) ** (1 / periods_per_year) - 1
         std = returns.std()
         if std == 0:
@@ -97,9 +92,7 @@ class Result:
         """
         The annualized return of the backtest.
         """
-        total_time = (
-            self.run_strategy.data.Timestamp[-1] - self.run_strategy.data.Timestamp[0]
-        )
+        total_time = self.run_strategy.index[-1] - self.run_strategy.index[0]
         years = total_time.days / (365.25)
         return (1 + self.total_return) ** (1 / years) - 1
 
@@ -126,6 +119,14 @@ class Result:
                 drawdown_percent,
             )
         return abs(max_drawdown_dollars), abs(max_drawdown_percent)
+
+    def plot_equity(self):
+        """
+        Plots the equity of the backtest.
+        """
+        plt.plot(self.run_strategy.index, self.equity)
+        plt.gcf().autofmt_xdate()
+        plt.show()
 
 
 class Backtester:

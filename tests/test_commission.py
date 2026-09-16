@@ -1,5 +1,5 @@
-from quantex.commission import Commission, ApplicationType
 from quantex.broker import Order, OrderType, OrderDirection
+from quantex.commission import Commission, ApplicationType
 import pandas as pd
 import pytest
 

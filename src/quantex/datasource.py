@@ -1,8 +1,8 @@
 from dataclasses import dataclass, field
-
-import pandas as pd
 import yfinance as yf
+import pandas as pd
 import numpy as np
+import copy
 
 
 class DataSource:
@@ -29,7 +29,7 @@ class DataSource:
                 print(f"Column {col} not found in DataFrame")
                 break
             else:
-                self.__data[col] = df[col].to_numpy(copy=True)
+                self.__data[col] = df[col].to_numpy(copy=True, dtype=np.float64)
         self._current = self.__data["timestamp"].shape[0]
 
     @property
@@ -130,6 +130,20 @@ class PricingData:
     ) -> None:
         if name is None:
             name = data.name
+        self.index = self.index.union(pd.to_datetime(data.Timestamp))
+        for key in self.datas.keys():
+            self.__reindex_data__(self.datas[key], key)
+        self.__reindex_data__(data, name)
 
+    def __reindex_data__(self, data: DataSource, name: str):
+        df = np.array(
+            [data.Timestamp, data.Open, data.High, data.Low, data.Close, data.Volume]
+        ).T
+        df = pd.DataFrame(
+            df, columns=["timestamp", "Open", "High", "Low", "Close", "Volume"]
+        )
+        df = df.set_index("timestamp")
+        df = df.reindex(self.index)
+        data = copy.deepcopy(data)
+        data.__init_df__(df)
         self.datas[name] = data
-        self.index = self.index.union(data.Timestamp)  # type: ignore

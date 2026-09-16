@@ -1,6 +1,9 @@
 from quantex.backtester import Backtester, SearchType
+from quantex.broker import Order, OrderDirection
 from quantex.datasource import DataSource
+import statsmodels.api as sm
 from quantex.strategy import Strategy
+from typing import Iterable, cast
 import pandas as pd
 import numpy as np
 import pytest
@@ -111,6 +114,45 @@ class MultipleStopLoss(Strategy):
         elif sig < 0:
             self.broker.close()
             self.broker.sell(amount=5, stop_loss=15)
+
+
+class MultipleDataSources(Strategy):
+    """
+    Simple cointegration strategy with fixed hedge ratio and constant.
+    """
+
+    window = 60  ## 2 months
+    hedge_ratio = 1
+    hedge_constant = 0.5
+    entry_threshold = 2  ## Enter when the |z-score| is above 2
+    exit_threshold = 0.5  ## Exit when the |z-score| is below 0.5
+
+    def init(self):
+        self.log1 = np.log(self.datas["NVDA"].Close)
+        self.log2 = np.log(self.datas["MSFT"].Close)
+        residuals = pd.Series(
+            self.log2 - (self.hedge_constant + self.hedge_ratio * self.log1),
+            index=self.index,
+        )
+        res_mean = residuals.rolling(self.window).mean()
+        res_std = residuals.rolling(self.window).std()
+        z_score = (residuals - res_mean) / res_std
+        self.z_score = self.Indicator(z_score)
+
+    def next(self):
+        if abs(self.z_score[-1]) > self.entry_threshold and self.broker.is_closed():
+            amount = 50
+            nvda_amount = (amount * self.datas["MSFT"].Close[-1]) / self.datas[
+                "NVDA"
+            ].Close[-1]
+            if self.z_score[-1] > 0:
+                self.broker.sell("MSFT", amount=amount)
+                self.broker.buy("NVDA", amount=nvda_amount)
+            elif self.z_score[-1] < 0:
+                self.broker.buy("MSFT", amount=amount)
+                self.broker.sell("NVDA", amount=nvda_amount)
+        elif abs(self.z_score[-1]) < self.exit_threshold:
+            self.broker.close()
 
 
 def test_backtester():
@@ -262,3 +304,121 @@ def test_multiple_stop_loss():
     bt.add_data(source)
     result = bt.run()
     assert result.total_return == pytest.approx(expected_return, rel=1e-2)
+
+
+def calculate_total_pnl(
+    orders: Iterable[Order],
+    prices: pd.Series | pd.DataFrame,
+) -> float:
+    """
+    Return total mark-to-market P&L as a cash amount.
+
+    Buys reduce cash and increase the position. Sells increase cash and
+    reduce the position. Any remaining position is valued at the final
+    available market price.
+
+    `Order.price` is used as the fill price when present. Otherwise, the
+    latest price at or before `fill_timestamp` is used.
+    """
+    if prices.empty:
+        raise ValueError("prices must not be empty")
+
+    prices = prices.copy()
+    prices.index = pd.to_datetime(prices.index)
+    prices = prices.sort_index().dropna()
+
+    if isinstance(prices, pd.DataFrame):
+        execution_prices = prices["Open"]
+        closing_prices = prices["Close"]
+    else:
+        execution_prices = prices
+        closing_prices = prices
+
+    if prices.index.has_duplicates:
+        prices = prices[~prices.index.duplicated(keep="last")]
+
+    cash = 0.0
+    position = 0.0
+
+    sorted_orders = sorted(
+        orders,
+        key=lambda order: pd.Timestamp(order.fill_timestamp),
+    )
+
+    for order in sorted_orders:
+        # Broker mutates a fully closed entry order to amount_filled == 0.
+        filled_amount = float(order.amount_filled or order.amount)
+
+        if filled_amount < 0:
+            raise ValueError(f"Order {order.id} has a negative amount_filled")
+
+        fill_timestamp = pd.Timestamp(order.fill_timestamp)
+
+        if order.price is not None:
+            execution_price = float(order.price)
+        else:
+            execution_price = cast(float, execution_prices.asof(fill_timestamp))
+
+            if pd.isna(execution_price):
+                raise ValueError(
+                    f"No market price available for order {order.id} at "
+                    f"{fill_timestamp}"
+                )
+
+        if execution_price <= 0:
+            raise ValueError(f"Order {order.id} has a non-positive execution price")
+
+        notional = filled_amount * execution_price
+
+        if order.direction == OrderDirection.BUY:
+            position += filled_amount
+            cash -= notional
+
+        elif order.direction == OrderDirection.SELL:
+            position -= filled_amount
+            cash += notional
+
+        else:
+            raise ValueError(f"Unsupported order direction: {order.direction!r}")
+
+    final_price = float(closing_prices.iloc[-1])
+    market_value = position * final_price
+
+    return cash + market_value
+
+
+def test_multiple_data_sources():
+    data1 = pd.read_parquet("tests/data/NVDA.parquet")
+    data2 = pd.read_parquet("tests/data/MSFT-2.parquet")
+    x = np.log(data1["Close"][data1.index < "2020-12-31"])  ## training data
+    y = np.log(data2["Close"][data2.index < "2020-12-31"])  ## training data
+    data1 = data1[data1.index >= "2020-12-31"]  ## strategy data
+    data2 = data2[data2.index >= "2020-12-31"]  ## strategy data
+    ## Calculate the hedge ratio
+    x = sm.add_constant(x)
+    result = sm.OLS(y, x).fit()
+    hedge_constant = result.params.iloc[0]
+    hedge_ratio = result.params.iloc[1]
+    source1 = DataSource("NVDA", data1)
+    source2 = DataSource("MSFT", data2)
+    bt = Backtester(MultipleDataSources)
+    bt.add_data(source1, "NVDA")
+    bt.add_data(source2, "MSFT")
+    result = bt.run({"hedge_ratio": hedge_ratio, "hedge_constant": hedge_constant})
+    assert result.total_return == pytest.approx(2.0427, rel=1e-2)
+    assert result.total_trades == 52
+    assert result.sharpe_ratio() == pytest.approx(0.7165, rel=1e-2)
+    assert result.annualized_return == pytest.approx(0.249450, rel=1e-2)
+    assert result.max_drawdown == pytest.approx((2008.65425, 0.200865), rel=1e-2)
+    total_return = 0.0
+    for name in ("NVDA", "MSFT"):
+        broker = result.run_strategy.broker
+        orders = broker.processedOrders[name] + broker.openPositions[name]
+        data = result.run_strategy.datas[name]
+        prices = pd.DataFrame(
+            {"Open": data.Open, "Close": data.Close},
+            index=result.run_strategy.index,
+        )
+        total_return += calculate_total_pnl(orders, prices)
+    total_return /= 10_000
+    assert total_return == pytest.approx(result.total_return, rel=1e-2)

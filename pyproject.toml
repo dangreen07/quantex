@@ -1,6 +1,6 @@
 [project]
 name = "quantex"
-version = "0.6.2"
+version = "0.6.3"
 description = "A simple quant strategy creation and backtesting package."
 authors = [
     {name = "Daniel Green",email = "dangreen07@outlook.com"}
@@ -19,6 +19,7 @@ dependencies = [
     "yfinance (>=1.7.0,<2.0.0)",
     "ta-lib (>=0.7.1,<0.8.0)",
     "mkdocs (>=1.6.1,<2.0.0)",
+    "statsmodels (>=0.15.0,<0.16.0)",
 ]
 
 [tool.poetry]

@@ -1,5 +1,5 @@
-from quantex.broker import Broker
 from quantex.datasource import DataSource, PricingData
+from quantex.broker import Broker
 from abc import abstractmethod
 import pandas as pd
 import numpy as np
@@ -45,6 +45,13 @@ class Strategy:
         The first data source used by the strategy.
         """
         return self.datas[list(self.datas.keys())[0]]
+
+    @property
+    def index(self) -> pd.DatetimeIndex:
+        """
+        The index of the data used by the strategy.
+        """
+        return self.__context__.index
 
     def add_data(
         self,
