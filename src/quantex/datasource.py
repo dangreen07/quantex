@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 import yfinance as yf
 import pandas as pd
 import numpy as np
+import copy
 
 
 class DataSource:
@@ -144,5 +145,6 @@ class PricingData:
         df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
         df = df.set_index("timestamp")
         df = df.reindex(self.index)
+        data = copy.deepcopy(data)
         data.__init_df__(df)
         self.datas[name] = data

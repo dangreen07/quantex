@@ -33,13 +33,12 @@ class Commission:
         self.fixed = fixed
         self.percentage = percentage
 
-    def calculate(self, order: Order, fill_price: float) -> float:
+    def calculate(self, order: Order) -> float:
         """
         Calculates the commission for an order.
 
         Parameters:
             order: The order to calculate the commission for.
-            fill_price: The fill price for the order.
 
         Returns:
             The commission for the order.
@@ -49,10 +48,10 @@ class Commission:
             if self.fixed is not None:
                 commission += self.fixed
             if self.percentage is not None:
-                commission += order.amount * fill_price * self.percentage
+                commission += order.amount * order.fill_price * self.percentage
         elif self.application == ApplicationType.PER_CONTRACT:
             if self.fixed is not None:
                 commission += self.fixed * order.amount
             if self.percentage is not None:
-                commission += order.amount * fill_price * self.percentage
+                commission += order.amount * order.fill_price * self.percentage
         return commission

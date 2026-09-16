@@ -1,4 +1,5 @@
 from quantex.datasource import DataSource, PricingData
+from quantex.commission import Commission
 from quantex.broker import Broker
 from abc import abstractmethod
 import pandas as pd
@@ -21,16 +22,26 @@ class Indicator:
 
 
 class Strategy:
-    def __init__(self, context: PricingData | None = None, cash: float = 10_000):
+    def __init__(
+        self,
+        commission: Commission,
+        context: PricingData | None = None,
+        cash: float = 10_000,
+        multiplier: float = 1,
+    ):
         """
         Strategy is the base class for all strategies.
 
         Parameters:
+            commission: The commission object to use to calculate commissions.
             context: The pricing data to use. If None, a new pricing data object will be created.
             cash: The starting cash to use. If None, the starting cash will be 10,000.
+            multiplier: The multiplier to the orders in the backtest.
         """
         self.__context__ = context or PricingData()
-        self.broker = Broker(self.__context__, cash)
+        self.broker = Broker(
+            self.__context__, commission, cash=cash, multiplier=multiplier
+        )
 
     @property
     def datas(self) -> dict[str, DataSource]:

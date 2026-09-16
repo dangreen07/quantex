@@ -418,3 +418,32 @@ def test_multiple_data_sources():
         total_return += calculate_total_pnl(orders, prices)
     total_return /= 10_000
     assert total_return == pytest.approx(result.total_return, rel=1e-2)
+
+
+class MultiplierTrading(Strategy):
+    def init(self):
+        signal = np.full(len(self.data.Close), 0)
+        signal[0] = 1
+        signal[9] = -1
+        self.signal = self.Indicator(signal)
+
+    def next(self):
+        if self.signal[-1] == 1:
+            self.broker.buy(amount=1)
+        elif self.signal[-1] == -1:
+            self.broker.sell(amount=1)
+
+
+def test_multiplier_trading():
+    data = np.arange(10, 30, 1)
+    data = np.array([data] * len(DataSource.REQUIRED_COLUMNS)).T
+    idx = pd.date_range("2022-01-01", periods=len(data), freq="D")
+    df = pd.DataFrame(data, index=idx, columns=DataSource.REQUIRED_COLUMNS)
+    source = DataSource("STOCK", df)
+    price_change = source.Close[10] - source.Close[1]
+    multiplier = 50
+    expected_return = (price_change * multiplier) / 10_000
+    bt = Backtester(MultiplierTrading, multiplier=multiplier)
+    bt.add_data(source)
+    result = bt.run()
+    print(result.total_return, expected_return)

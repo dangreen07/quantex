@@ -135,6 +135,7 @@ class Backtester:
         strategy: type[Strategy],
         commission: Commission | None = None,
         cash: float = 10_000,
+        multiplier: float = 1,
     ):
         """
         This class is used to run a backtest on a strategy.
@@ -146,8 +147,11 @@ class Backtester:
                 The commission to be applied to the strategy. If None, no commission will be applied.
             cash:
                 The starting cash to be used in the backtest.
+            multiplier:
+                The multiplier to the orders in the backtest.
         """
         self.strategy = strategy
+        self.multiplier = multiplier
         self.data = PricingData()
         self.cash = cash
         self.commission = commission or Commission()
@@ -177,7 +181,12 @@ class Backtester:
             Result: The result of the backtest.
         """
         data = copy.deepcopy(self.data)
-        strat = self.strategy(data, cash=self.cash)
+        strat = self.strategy(
+            commission=self.commission,
+            context=data,
+            cash=self.cash,
+            multiplier=self.multiplier,
+        )
         if params is not None:
             for name, value in params.items():
                 setattr(strat, name, value)
@@ -209,8 +218,8 @@ class Backtester:
             if skip_nan:
                 continue
             strat.broker.__process_orders__()
-            strat.next()
             equity[i] = strat.broker.equity()
+            strat.next()
         result = Result(equity, initial_cash, strat, strat.broker.total_trades)
         return result
 
@@ -228,8 +237,14 @@ class Backtester:
 
         Parameters:
             params: The parameters to optimize.
+            constraint: The constraint to use for the optimization.
             max_trials: The maximum number of trials to run.
             search_type: The search type to use.
+            risk_free_rate: The risk free rate to use in the optimization.
+            seed: The seed to use for the optimization.
+
+        Returns:
+            The maximum sharpe ratio and the best trial.
         """
         self.results = []
         self.max_sharpe = -np.inf

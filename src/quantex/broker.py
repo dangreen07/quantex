@@ -1,4 +1,5 @@
 from quantex.datasource import PricingData
+from quantex.commission import Commission
 from dataclasses import dataclass
 import pandas as pd
 from enum import Enum
@@ -30,6 +31,7 @@ class NewOrder:
 class Order(NewOrder):
     fill_timestamp: pd.Timestamp
     amount_filled: float
+    fill_price: float
 
 
 class Broker:
@@ -39,7 +41,13 @@ class Broker:
     openPositions: dict[str, list[Order]]  ## Orders that are currently open
     __orderId__: int
 
-    def __init__(self, context: PricingData, cash: float = 10_000):
+    def __init__(
+        self,
+        context: PricingData,
+        commission: Commission,
+        cash: float = 10_000,
+        multiplier: float = 1,
+    ):
         self.cash = cash
         self.total_trades = 0
         self.orderQueue = {}
@@ -48,6 +56,8 @@ class Broker:
         self.cancelQueue = {}
         self.__context__ = context
         self.__orderId__ = 1
+        self.multiplier = multiplier
+        self.commission = commission
         for name in self.__context__.datas.keys():
             self.orderQueue[name] = []
             self.processedOrders[name] = []
@@ -115,35 +125,39 @@ class Broker:
                 if len(positions) == 0:
                     self.total_trades += 1
                 if len(positions) == 0 and amount > 0:
-                    positions.append(
-                        Order(
-                            order.id,
-                            order.transmit_timestamp,
-                            order.type,
-                            order.direction,
-                            order.amount,
-                            order.price,
-                            order.parentId,
-                            curr_timestamp,
-                            order.amount - amount,  ## Partially filled
-                        )
+                    order = Order(
+                        id=order.id,
+                        transmit_timestamp=order.transmit_timestamp,
+                        type=order.type,
+                        direction=order.direction,
+                        amount=order.amount,
+                        price=order.price,
+                        parentId=order.parentId,
+                        fill_timestamp=curr_timestamp,
+                        amount_filled=order.amount - amount,  ## Partially filled
+                        fill_price=price,
                     )
+                    positions.append(order)
+                    self.cash -= self.commission.calculate(order)
                 else:
+                    order = Order(
+                        id=order.id,
+                        transmit_timestamp=order.transmit_timestamp,
+                        type=order.type,
+                        direction=order.direction,
+                        amount=order.amount,
+                        price=order.price,
+                        parentId=order.parentId,
+                        fill_timestamp=curr_timestamp,
+                        amount_filled=order.amount,  ## Fully filled
+                        fill_price=price,
+                    )
                     self.processedOrders[name].append(
-                        Order(
-                            order.id,
-                            order.transmit_timestamp,
-                            order.type,
-                            order.direction,
-                            order.amount,
-                            order.price,
-                            order.parentId,
-                            curr_timestamp,
-                            order.amount,  ## Fully filled
-                        )
+                        order
                     )  ## This order has been fully executed
+                    self.cash -= self.commission.calculate(order)
                 self.openPositions[name] = positions
-                total = (order.amount - amount) * price
+                total = (order.amount - amount) * price * self.multiplier
                 if order.direction == OrderDirection.BUY:
                     self.cash -= total
                 else:
@@ -152,20 +166,21 @@ class Broker:
         else:
             price: float = self.__context__.datas[name].Open[-1]
             if self.execute_condition(order, price):
-                total = order.amount * price
-                self.openPositions[name].append(
-                    Order(
-                        order.id,
-                        order.transmit_timestamp,
-                        order.type,
-                        order.direction,
-                        order.amount,
-                        order.price,
-                        order.parentId,
-                        curr_timestamp,
-                        order.amount,  ## Fully filled
-                    )
+                total = order.amount * price * self.multiplier
+                order = Order(
+                    id=order.id,
+                    transmit_timestamp=order.transmit_timestamp,
+                    type=order.type,
+                    direction=order.direction,
+                    amount=order.amount,
+                    price=order.price,
+                    parentId=order.parentId,
+                    fill_timestamp=curr_timestamp,
+                    amount_filled=order.amount,  ## Fully filled
+                    fill_price=price,
                 )
+                self.openPositions[name].append(order)
+                self.cash -= self.commission.calculate(order)
                 if order.direction == OrderDirection.BUY:
                     self.cash -= total
                 else:
@@ -195,10 +210,12 @@ class Broker:
         for name in self.orderQueue.keys():
             for order in self.openPositions[name]:
                 prices = self.__context__.datas[name].Close
+                initial_value = order.fill_price * order.amount_filled * self.multiplier
+                price_change = (prices[-1] - order.fill_price) * self.multiplier
                 if order.direction == OrderDirection.BUY:
-                    equity += order.amount_filled * prices[-1]
+                    equity += initial_value + price_change * order.amount_filled
                 else:
-                    equity -= order.amount_filled * prices[-1]
+                    equity -= initial_value + price_change * order.amount_filled
         return equity
 
     def buy(
