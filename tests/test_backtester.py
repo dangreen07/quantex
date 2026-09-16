@@ -161,11 +161,6 @@ def test_backtester():
     source = DataSource("NVDA", data)
     bt.add_data(source, "NVDA")
     result = bt.run()
-    print(f"Total return: {result.total_return:.2%}")
-    print(f"Total trades: {result.total_trades}")
-    print(f"Sharpe ratio: {result.sharpe_ratio():.2f}")
-    print(f"Annualized return: {result.annualized_return:.2%}")
-    print(f"Max drawdown: {result.max_drawdown}")
     assert result.total_return == pytest.approx(0.6169, rel=1e-2)
     assert result.total_trades == 157
     assert result.sharpe_ratio() == pytest.approx(0.4155, rel=1e-2)
@@ -225,7 +220,8 @@ def test_basic_backtester():
                 "Low": [5, 10, 15, 20],
                 "Close": [15, 20, 25, 30],
                 "Volume": [100, 100, 100, 100],
-            }
+            },
+            index=pd.date_range("2022-01-01", periods=4, freq="D"),
         ),
     )
     bt.add_data(source)

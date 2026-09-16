@@ -2,7 +2,6 @@ from dataclasses import dataclass, field
 import yfinance as yf
 import pandas as pd
 import numpy as np
-import copy
 
 
 class DataSource:
@@ -130,7 +129,7 @@ class PricingData:
     ) -> None:
         if name is None:
             name = data.name
-        self.index = self.index.union(pd.to_datetime(data.Timestamp))
+        self.index = self.index.union(pd.to_datetime(data.Timestamp, utc=True))
         for key in self.datas.keys():
             self.__reindex_data__(self.datas[key], key)
         self.__reindex_data__(data, name)
@@ -142,8 +141,8 @@ class PricingData:
         df = pd.DataFrame(
             df, columns=["timestamp", "Open", "High", "Low", "Close", "Volume"]
         )
+        df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
         df = df.set_index("timestamp")
         df = df.reindex(self.index)
-        data = copy.deepcopy(data)
         data.__init_df__(df)
         self.datas[name] = data
