@@ -1,37 +1,7 @@
 from quantex.datasource import PricingData
 from quantex.commission import Commission
-from dataclasses import dataclass
-import pandas as pd
-from enum import Enum
-
-
-class OrderType(Enum):
-    LIMIT = "LIMIT"
-    MARKET = "MARKET"
-    STOP = "STOP"
-
-
-class OrderDirection(Enum):
-    BUY = 1
-    SELL = -1
-
-
-@dataclass
-class NewOrder:
-    id: int
-    transmit_timestamp: pd.Timestamp
-    type: OrderType
-    direction: OrderDirection
-    amount: float
-    price: float | None
-    parentId: int | None
-
-
-@dataclass
-class Order(NewOrder):
-    fill_timestamp: pd.Timestamp
-    amount_filled: float
-    fill_price: float
+from quantex.enums import NewOrder, Order, OrderDirection, OrderType
+from quantex.margin import Margin
 
 
 class Broker:
@@ -45,6 +15,7 @@ class Broker:
         self,
         context: PricingData,
         commission: Commission,
+        margin: Margin,
         cash: float = 10_000,
         multiplier: float = 1,
     ):

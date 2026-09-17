@@ -1,14 +1,4 @@
-from quantex.broker import Order
-from enum import Enum
-
-
-class ApplicationType(Enum):
-    """
-    The application type for a commission.
-    """
-
-    PER_ORDER = 1  ## Applies for each order
-    PER_CONTRACT = 2  ## Applies for each contract
+from quantex.enums import ApplicationType, Order
 
 
 class Commission:
@@ -33,7 +23,7 @@ class Commission:
         self.fixed = fixed
         self.percentage = percentage
 
-    def calculate(self, order: Order) -> float:
+    def calculate(self, order: "Order") -> float:
         """
         Calculates the commission for an order.
 

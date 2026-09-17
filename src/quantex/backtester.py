@@ -1,22 +1,18 @@
 from quantex.datasource import DataSource, PricingData
+from quantex.enums import SearchType
+from quantex.margin import Margin
 from quantex.strategy import Indicator, Strategy
 from quantex.commission import Commission
 from collections.abc import Callable
 from matplotlib import pyplot as plt
 from dataclasses import dataclass
 from itertools import product
-from enum import Enum
 import pandas as pd
 import numpy as np
 import optuna
 import tqdm
 import math
 import copy
-
-
-class SearchType(Enum):
-    GRID = 1
-    OPTUNA = 2
 
 
 @dataclass
@@ -134,6 +130,7 @@ class Backtester:
         self,
         strategy: type[Strategy],
         commission: Commission | None = None,
+        margin: Margin | None = None,
         cash: float = 10_000,
         multiplier: float = 1,
     ):
@@ -155,6 +152,7 @@ class Backtester:
         self.data = PricingData()
         self.cash = cash
         self.commission = commission or Commission()
+        self.margin = margin or Margin()
 
     def add_data(self, data: DataSource, name: str | None = None):
         """
@@ -185,6 +183,7 @@ class Backtester:
             commission=self.commission,
             context=data,
             cash=self.cash,
+            margin=self.margin,
             multiplier=self.multiplier,
         )
         if params is not None:

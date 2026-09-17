@@ -5,6 +5,8 @@ from abc import abstractmethod
 import pandas as pd
 import numpy as np
 
+from quantex.margin import Margin
+
 
 class Indicator:
     def __init__(self, data: np.ndarray):
@@ -24,9 +26,10 @@ class Indicator:
 class Strategy:
     def __init__(
         self,
-        commission: Commission,
+        commission: Commission | None = None,
         context: PricingData | None = None,
         cash: float = 10_000,
+        margin: Margin | None = None,
         multiplier: float = 1,
     ):
         """
@@ -36,11 +39,16 @@ class Strategy:
             commission: The commission object to use to calculate commissions.
             context: The pricing data to use. If None, a new pricing data object will be created.
             cash: The starting cash to use. If None, the starting cash will be 10,000.
+            margin: The margin object to use. If None, a new margin object will be created.
             multiplier: The multiplier to the orders in the backtest.
         """
         self.__context__ = context or PricingData()
+        if commission is None:
+            commission = Commission()
+        if margin is None:
+            margin = Margin()
         self.broker = Broker(
-            self.__context__, commission, cash=cash, multiplier=multiplier
+            self.__context__, commission, margin, cash=cash, multiplier=multiplier
         )
 
     @property
