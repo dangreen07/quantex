@@ -28,6 +28,7 @@ class Broker:
         self.__context__ = context
         self.__orderId__ = 1
         self.multiplier = multiplier
+        self.margin = margin
         self.commission = commission
         for name in self.__context__.datas.keys():
             self.orderQueue[name] = []

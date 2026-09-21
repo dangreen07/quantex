@@ -51,12 +51,14 @@ class SMACrossover(Strategy):
 
 
 class BuyAndHold(Strategy):
+    amount = 50.0
+
     def init(self):
         pass
 
     def next(self):
         if self.broker.is_closed():
-            self.broker.buy(amount=50)
+            self.broker.buy(amount=self.amount)
 
 
 class PartialFill(Strategy):
@@ -447,3 +449,16 @@ def test_multiplier_trading():
     bt.add_data(source)
     result = bt.run()
     print(result.total_return, expected_return)
+
+
+def test_trade_more_than_account():
+    data = np.arange(10, 20, 1).tolist()
+    data = np.array([data] * len(DataSource.REQUIRED_COLUMNS)).T
+    idx = pd.date_range("2022-01-01", periods=len(data), freq="D")
+    df = pd.DataFrame(data, index=idx, columns=DataSource.REQUIRED_COLUMNS)
+    source = DataSource("TEST", df)
+    bt = Backtester(BuyAndHold)
+    bt.add_data(source)
+    result = bt.run(params={"amount": 2_000})
+    assert result.total_return == pytest.approx(0.0)
+    assert result.total_trades == 0
