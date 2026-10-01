@@ -4,10 +4,10 @@ from quantex.enums import MarginType, OrderDirection
 class Margin:
     def __init__(
         self,
-        initial_margin: tuple[float, float] = (0, 0),
-        initial_margin_type: MarginType = MarginType.FIXED_PER_CONTRACT,
-        maintenance_margin: tuple[float, float] = (0, 0),
-        maintenance_margin_type: MarginType = MarginType.FIXED_PER_CONTRACT,
+        initial_margin: tuple[float, float] = (1, 0),
+        initial_margin_type: MarginType = MarginType.PERCENTAGE,
+        maintenance_margin: tuple[float, float] = (0, 0.5),
+        maintenance_margin_type: MarginType = MarginType.PERCENTAGE,
     ):
         """
         This class is used to calculate margin for a strategy.

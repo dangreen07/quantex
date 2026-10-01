@@ -2,6 +2,20 @@ from quantex.broker import OrderDirection
 from quantex.margin import Margin, MarginType
 import pytest
 
+def test_no_margin():
+    margin = Margin()
+    assert margin.get_initial_margin(
+        direction=OrderDirection.BUY, amount=100, price=100, multiplier=1
+    ) == pytest.approx(100 * 100)
+    assert margin.get_initial_margin(
+        direction=OrderDirection.SELL, amount=100, price=100, multiplier=1
+    ) == pytest.approx(0)
+    assert margin.get_maintenance_margin(
+        direction=OrderDirection.BUY, amount=100, price=100, multiplier=1
+    ) == pytest.approx(0)
+    assert margin.get_maintenance_margin(
+        direction=OrderDirection.SELL, amount=100, price=100, multiplier=1
+    ) == pytest.approx(100*100*0.5)
 
 def test_margin_percentage():
     margin = Margin(
