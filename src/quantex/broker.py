@@ -1,3 +1,5 @@
+from typing import cast
+
 from quantex.datasource import PricingData
 from quantex.commission import Commission
 from quantex.enums import NewOrder, Order, OrderDirection, OrderType
@@ -51,6 +53,142 @@ class Broker:
                 return True
         return False
 
+    def __equity_at_prices__(self, prices: dict[str, float] | None = None) -> float:
+        equity = self.cash
+        for name, positions in self.openPositions.items():
+            price = (
+                prices[name]
+                if prices is not None and name in prices
+                else self.__context__.datas[name].Close[-1]
+            )
+            for position in positions:
+                equity += (
+                    position.direction.value
+                    * price
+                    * position.amount_filled
+                    * self.multiplier
+                )
+        return equity
+
+    def __margin_requirement__(self, prices: dict[str, float], initial: bool) -> float:
+        get_margin = (
+            self.margin.get_initial_margin
+            if initial
+            else self.margin.get_maintenance_margin
+        )
+        requirement = 0.0
+        for name, positions in self.openPositions.items():
+            price = prices.get(name)
+            if price is None:
+                price = cast(float, self.__context__.datas[name].Close[-1])
+            for position in positions:
+                requirement += get_margin(
+                    position.direction,
+                    position.amount_filled,
+                    price,
+                    self.multiplier,
+                )
+        return requirement
+
+    def __has_initial_margin__(self, order: NewOrder, name: str, price: float) -> bool:
+        prices = {
+            data_name: self.__context__.datas[data_name].Open[-1]
+            for data_name in self.openPositions
+        }
+        prices[name] = price
+        current_requirement = self.__margin_requirement__(prices, initial=True)
+        other_positions_requirement = 0.0
+        for data_name, positions in self.openPositions.items():
+            if data_name == name:
+                continue
+            data_price = prices[data_name]
+            for position in positions:
+                other_positions_requirement += self.margin.get_initial_margin(
+                    position.direction,
+                    position.amount_filled,
+                    data_price,
+                    self.multiplier,
+                )
+
+        signed_amount = (
+            sum(
+                position.direction.value * position.amount_filled
+                for position in self.openPositions[name]
+            )
+            + order.direction.value * order.amount
+        )
+        projected_requirement = other_positions_requirement
+        if signed_amount != 0:
+            direction = OrderDirection.BUY if signed_amount > 0 else OrderDirection.SELL
+            projected_requirement += self.margin.get_initial_margin(
+                direction, abs(signed_amount), price, self.multiplier
+            )
+        if projected_requirement <= current_requirement:
+            return True
+
+        candidate = Order(
+            id=order.id,
+            transmit_timestamp=order.transmit_timestamp,
+            type=order.type,
+            direction=order.direction,
+            amount=order.amount,
+            price=order.price,
+            parentId=order.parentId,
+            fill_timestamp=self.__context__.datas[name].Timestamp[-1],
+            amount_filled=order.amount,
+            fill_price=price,
+        )
+        equity_after_commission = self.__equity_at_prices__(prices) - (
+            self.commission.calculate(candidate)
+        )
+        return equity_after_commission >= projected_requirement
+
+    def __cancel_attached_orders__(self, order: NewOrder, name: str) -> None:
+        self.cancelQueue[name].extend(
+            queued_order
+            for queued_order in self.orderQueue[name]
+            if queued_order.parentId == order.id
+        )
+
+    def __check_maintenance_margin__(self) -> bool:
+        if not any(self.openPositions.values()):
+            return False
+
+        prices = {
+            name: self.__context__.datas[name].Open[-1] for name in self.openPositions
+        }
+        equity = self.__equity_at_prices__(prices)
+        requirement = self.__margin_requirement__(prices, initial=False)
+        if equity >= requirement:
+            return False
+
+        for name, positions in self.openPositions.items():
+            if not positions:
+                continue
+            direction = (
+                OrderDirection.SELL
+                if positions[0].direction == OrderDirection.BUY
+                else OrderDirection.BUY
+            )
+            self.__process_order__(
+                NewOrder(
+                    id=self.__orderId__,
+                    transmit_timestamp=self.__context__.datas[name].Timestamp[-1],
+                    type=OrderType.MARKET,
+                    direction=direction,
+                    amount=sum(position.amount_filled for position in positions),
+                    price=None,
+                    parentId=None,
+                ),
+                name,
+            )
+            self.__orderId__ += 1
+
+        for name in self.orderQueue:
+            self.orderQueue[name].clear()
+            self.cancelQueue[name].clear()
+        return True
+
     def __process_order__(self, order: NewOrder, name: str):
         openPositionsDirection = None
         if self.openPositions[name] and len(self.openPositions[name]) > 0:
@@ -59,6 +197,9 @@ class Broker:
         if openPositionsDirection and openPositionsDirection != order.direction:
             price: float = self.__context__.datas[name].Open[-1]
             if self.execute_condition(order, price):
+                if not self.__has_initial_margin__(order, name, price):
+                    self.__cancel_attached_orders__(order, name)
+                    return True
                 amount = order.amount
                 for i in range(len(self.openPositions[name])):
                     open_amount = self.openPositions[name][i].amount_filled
@@ -138,6 +279,9 @@ class Broker:
         else:
             price: float = self.__context__.datas[name].Open[-1]
             if self.execute_condition(order, price):
+                if not self.__has_initial_margin__(order, name, price):
+                    self.__cancel_attached_orders__(order, name)
+                    return True
                 total = order.amount * price * self.multiplier
                 order = Order(
                     id=order.id,
@@ -161,6 +305,8 @@ class Broker:
         return False
 
     def __process_orders__(self):
+        if self.__check_maintenance_margin__():
+            return
         for name in self.orderQueue.keys():
             queue = []
             for order in self.orderQueue[name]:
@@ -178,17 +324,7 @@ class Broker:
         Returns:
             The current equity.
         """
-        equity = self.cash
-        for name in self.orderQueue.keys():
-            for order in self.openPositions[name]:
-                prices = self.__context__.datas[name].Close
-                initial_value = order.fill_price * order.amount_filled * self.multiplier
-                price_change = (prices[-1] - order.fill_price) * self.multiplier
-                if order.direction == OrderDirection.BUY:
-                    equity += initial_value + price_change * order.amount_filled
-                else:
-                    equity -= initial_value + price_change * order.amount_filled
-        return equity
+        return self.__equity_at_prices__()
 
     def buy(
         self,

@@ -1,6 +1,7 @@
 from quantex.backtester import Backtester, SearchType
 from quantex.broker import Order, OrderDirection
 from quantex.datasource import DataSource
+from quantex.margin import Margin
 import statsmodels.api as sm
 from quantex.strategy import Strategy
 from typing import Iterable, cast
@@ -59,6 +60,27 @@ class BuyAndHold(Strategy):
     def next(self):
         if self.broker.is_closed():
             self.broker.buy(amount=self.amount)
+
+
+class SellAndHold(Strategy):
+    amount = 1.0
+
+    def init(self):
+        pass
+
+    def next(self):
+        if self.broker.is_closed():
+            self.broker.sell(amount=self.amount)
+
+
+class RejectedBracketOrder(Strategy):
+    def init(self):
+        self.placed = False
+
+    def next(self):
+        if not self.placed:
+            self.broker.buy(amount=2_000, stop_loss=9, take_profit=11)
+            self.placed = True
 
 
 class PartialFill(Strategy):
@@ -171,7 +193,10 @@ def test_backtester():
 
 
 def test_optimize_grid():
-    bt = Backtester(SMACrossover)
+    bt = Backtester(
+        SMACrossover,
+        margin=Margin(initial_margin=(0, 0), maintenance_margin=(0, 0)),
+    )
     data = pd.read_parquet("tests/data/NVDA.parquet")
     source = DataSource("NVDA", data)
     bt.add_data(source, "NVDA")
@@ -191,7 +216,10 @@ def test_optimize_grid():
 
 
 def test_optimize_optuna():
-    bt = Backtester(SMACrossover)
+    bt = Backtester(
+        SMACrossover,
+        margin=Margin(initial_margin=(0, 0), maintenance_margin=(0, 0)),
+    )
     data = pd.read_parquet("tests/data/NVDA.parquet")
     source = DataSource("NVDA", data)
     bt.add_data(source, "NVDA")
@@ -399,7 +427,10 @@ def test_multiple_data_sources():
     hedge_ratio = result.params.iloc[1]
     source1 = DataSource("NVDA", data1)
     source2 = DataSource("MSFT", data2)
-    bt = Backtester(MultipleDataSources)
+    bt = Backtester(
+        MultipleDataSources,
+        margin=Margin(initial_margin=(0, 0), maintenance_margin=(0, 0)),
+    )
     bt.add_data(source1, "NVDA")
     bt.add_data(source2, "MSFT")
     result = bt.run({"hedge_ratio": hedge_ratio, "hedge_constant": hedge_constant})
@@ -462,3 +493,79 @@ def test_trade_more_than_account():
     result = bt.run(params={"amount": 2_000})
     assert result.total_return == pytest.approx(0.0)
     assert result.total_trades == 0
+
+
+def test_initial_margin_allows_leverage_with_sufficient_equity():
+    prices = np.full(4, 10)
+    data = np.array([prices] * len(DataSource.REQUIRED_COLUMNS)).T
+    idx = pd.date_range("2022-01-01", periods=len(data), freq="D")
+    df = pd.DataFrame(data, index=idx, columns=DataSource.REQUIRED_COLUMNS)
+    source = DataSource("TEST", df)
+    margin = Margin(
+        initial_margin=(0.5, 0),
+        maintenance_margin=(0, 0),
+    )
+    bt = Backtester(BuyAndHold, margin=margin)
+    bt.add_data(source)
+
+    result = bt.run(params={"amount": 2_000})
+
+    assert result.run_strategy.broker.openPositions["TEST"][0].amount_filled == 2_000
+
+
+@pytest.mark.parametrize(
+    ("amount", "expected_open"),
+    [(200, True), (201, False)],
+)
+def test_short_initial_margin_uses_short_requirement(amount, expected_open):
+    prices = np.full(4, 10)
+    data = np.array([prices] * len(DataSource.REQUIRED_COLUMNS)).T
+    idx = pd.date_range("2022-01-01", periods=len(data), freq="D")
+    df = pd.DataFrame(data, index=idx, columns=DataSource.REQUIRED_COLUMNS)
+    source = DataSource("TEST", df)
+    margin = Margin(
+        initial_margin=(1, 0.5),
+        maintenance_margin=(0, 0.25),
+    )
+    bt = Backtester(SellAndHold, margin=margin, cash=1_000)
+    bt.add_data(source)
+
+    result = bt.run(params={"amount": amount})
+
+    assert result.run_strategy.broker.is_short("TEST") is expected_open
+
+
+def test_rejected_entry_cancels_attached_orders():
+    prices = np.array([10, 10, 9, 9])
+    data = np.array([prices] * len(DataSource.REQUIRED_COLUMNS)).T
+    idx = pd.date_range("2022-01-01", periods=len(data), freq="D")
+    df = pd.DataFrame(data, index=idx, columns=DataSource.REQUIRED_COLUMNS)
+    source = DataSource("TEST", df)
+    bt = Backtester(RejectedBracketOrder)
+    bt.add_data(source)
+
+    result = bt.run()
+
+    assert result.run_strategy.broker.is_closed("TEST")
+
+
+def test_maintenance_margin_liquidates_at_bar_open():
+    prices = np.array([10, 10, 4, 4, 4])
+    data = np.array([prices] * len(DataSource.REQUIRED_COLUMNS)).T
+    idx = pd.date_range("2022-01-01", periods=len(data), freq="D")
+    df = pd.DataFrame(data, index=idx, columns=DataSource.REQUIRED_COLUMNS)
+    source = DataSource("TEST", df)
+    margin = Margin(
+        initial_margin=(0.5, 0),
+        maintenance_margin=(0.25, 0),
+    )
+    bt = Backtester(BuyAndHold, margin=margin, cash=1_000)
+    bt.add_data(source)
+
+    result = bt.run(params={"amount": 200})
+
+    assert result.run_strategy.broker.is_closed("TEST")
+    assert any(
+        order.direction == OrderDirection.SELL
+        for order in result.run_strategy.broker.processedOrders["TEST"]
+    )
